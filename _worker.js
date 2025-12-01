@@ -49,6 +49,131 @@ function isValidSession(cookieHeader, env) {
     }
 }
 
+// 获取客户端IP地址
+function getClientIP(request) {
+    // 从 Cloudflare 的请求头获取真实IP
+    return request.headers.get('CF-Connecting-IP') || 
+           request.headers.get('X-Forwarded-For')?.split(',')[0] || 
+           'unknown';
+}
+
+// 防暴力破解：检查IP是否被限制
+async function checkBruteForceProtection(ip, env) {
+    // 如果没有 KV 存储，使用内存缓存（仅限单实例，不推荐生产环境）
+    // 建议使用 Cloudflare KV 存储来跨实例共享数据
+    
+    const MAX_ATTEMPTS = 5; // 最大尝试次数
+    const LOCKOUT_TIME = 15 * 60 * 1000; // 锁定时间15分钟
+    const ATTEMPT_WINDOW = 60 * 1000; // 尝试窗口1分钟
+    
+    // 尝试使用 KV 存储
+    if (env && env.AUTH_KV) {
+        const kv = env.AUTH_KV;
+        const attemptKey = `auth_attempts:${ip}`;
+        const lockoutKey = `auth_lockout:${ip}`;
+        
+        // 检查是否被锁定
+        const lockoutData = await kv.get(lockoutKey);
+        if (lockoutData) {
+            const lockoutTime = parseInt(lockoutData);
+            const now = Date.now();
+            if (now < lockoutTime) {
+                const remainingMinutes = Math.ceil((lockoutTime - now) / 60000);
+                return {
+                    blocked: true,
+                    message: `登录尝试次数过多，请 ${remainingMinutes} 分钟后再试`
+                };
+            } else {
+                // 锁定时间已过，清除锁定
+                await kv.delete(lockoutKey);
+                await kv.delete(attemptKey);
+            }
+        }
+        
+        // 检查尝试次数
+        const attemptsData = await kv.get(attemptKey);
+        if (attemptsData) {
+            const attempts = JSON.parse(attemptsData);
+            const now = Date.now();
+            
+            // 清理过期的尝试记录（超过1分钟）
+            const recentAttempts = attempts.filter(t => now - t < ATTEMPT_WINDOW);
+            
+            if (recentAttempts.length >= MAX_ATTEMPTS) {
+                // 达到最大尝试次数，锁定账户
+                const lockoutUntil = now + LOCKOUT_TIME;
+                await kv.put(lockoutKey, lockoutUntil.toString());
+                await kv.delete(attemptKey);
+                return {
+                    blocked: true,
+                    message: `登录尝试次数过多，账户已被锁定 15 分钟`
+                };
+            }
+            
+            // 更新尝试记录
+            recentAttempts.push(now);
+            await kv.put(attemptKey, JSON.stringify(recentAttempts), { expirationTtl: Math.ceil(LOCKOUT_TIME / 1000) });
+        }
+        
+        return { blocked: false };
+    }
+    
+    // 如果没有 KV 存储，使用简单的内存缓存（仅限单实例）
+    // 注意：这在多实例环境下不会工作，建议使用 KV
+    if (!global.authAttempts) {
+        global.authAttempts = new Map();
+    }
+    
+    const now = Date.now();
+    const attempts = global.authAttempts.get(ip) || [];
+    
+    // 清理过期的尝试记录
+    const recentAttempts = attempts.filter(t => now - t < ATTEMPT_WINDOW);
+    
+    if (recentAttempts.length >= MAX_ATTEMPTS) {
+        return {
+            blocked: true,
+            message: `登录尝试次数过多，请稍后再试`
+        };
+    }
+    
+    return { blocked: false };
+}
+
+// 记录失败的登录尝试
+async function recordFailedAttempt(ip, env) {
+    if (env && env.AUTH_KV) {
+        const kv = env.AUTH_KV;
+        const attemptKey = `auth_attempts:${ip}`;
+        const attemptsData = await kv.get(attemptKey);
+        const attempts = attemptsData ? JSON.parse(attemptsData) : [];
+        attempts.push(Date.now());
+        await kv.put(attemptKey, JSON.stringify(attempts), { expirationTtl: 900 }); // 15分钟过期
+    } else {
+        // 内存缓存
+        if (!global.authAttempts) {
+            global.authAttempts = new Map();
+        }
+        const attempts = global.authAttempts.get(ip) || [];
+        attempts.push(Date.now());
+        global.authAttempts.set(ip, attempts);
+    }
+}
+
+// 清除成功的登录尝试记录
+async function clearFailedAttempts(ip, env) {
+    if (env && env.AUTH_KV) {
+        const kv = env.AUTH_KV;
+        await kv.delete(`auth_attempts:${ip}`);
+        await kv.delete(`auth_lockout:${ip}`);
+    } else {
+        // 内存缓存
+        if (global.authAttempts) {
+            global.authAttempts.delete(ip);
+        }
+    }
+}
+
 function generateLoginPage(error = '') {
     return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -147,6 +272,17 @@ function generateLoginPage(error = '') {
             font-size: 14px;
             margin-bottom: 20px;
             display: ${error ? 'block' : 'none'};
+            word-break: break-word;
+        }
+        
+        .warning-message {
+            background: rgba(255, 149, 0, 0.1);
+            color: #ff9500;
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 13px;
+            margin-bottom: 20px;
+            text-align: center;
         }
         
         .btn {
@@ -210,6 +346,10 @@ function generateLoginPage(error = '') {
         
         <div class="error-message" id="errorMsg">${error}</div>
         
+        <div class="warning-message">
+            <p>⚠️ 安全提示：连续 5 次登录失败将被锁定 15 分钟</p>
+        </div>
+        
         <form method="POST" action="/login" id="loginForm">
             <div class="form-group">
                 <label>密码</label>
@@ -221,6 +361,7 @@ function generateLoginPage(error = '') {
         
         <div class="info-text">
             <p>忘记密码？请联系管理员在 Cloudflare Workers 后台重置</p>
+            <p style="margin-top: 8px; font-size: 12px;">订阅链接需要登录后才能访问</p>
         </div>
     </div>
     
@@ -1442,6 +1583,11 @@ async function checkPassword(request, env) {
         return { valid: true };
     }
     
+    // 获取客户端IP
+    const clientIP = getClientIP(request);
+    const url = new URL(request.url);
+    const path = url.pathname;
+    
     // 检查会话
     const cookieHeader = request.headers.get('Cookie');
     if (isValidSession(cookieHeader, env)) {
@@ -1449,12 +1595,30 @@ async function checkPassword(request, env) {
     }
     
     // 处理登录请求
-    if (request.method === 'POST' && new URL(request.url).pathname === '/login') {
+    if (request.method === 'POST' && path === '/login') {
+        // 检查防暴力破解保护
+        const bruteForceCheck = await checkBruteForceProtection(clientIP, env);
+        if (bruteForceCheck.blocked) {
+            return {
+                valid: false,
+                response: new Response(generateLoginPage(bruteForceCheck.message), {
+                    status: 429,
+                    headers: { 
+                        'Content-Type': 'text/html; charset=utf-8',
+                        'Retry-After': '900'
+                    }
+                })
+            };
+        }
+        
         const formData = await request.formData();
         const inputPassword = formData.get('password');
         
         if (inputPassword === password) {
-            // 密码正确，创建会话
+            // 密码正确，清除失败尝试记录
+            await clearFailedAttempts(clientIP, env);
+            
+            // 创建会话
             const sessionToken = generateSessionToken();
             const sessionCookie = `cf_session=${btoa(Date.now().toString() + sessionToken)}; Path=/; Max-Age=86400; HttpOnly; SameSite=Lax`;
             
@@ -1470,7 +1634,24 @@ async function checkPassword(request, env) {
                 })
             };
         } else {
-            // 密码错误
+            // 密码错误，记录失败尝试
+            await recordFailedAttempt(clientIP, env);
+            
+            // 再次检查是否达到限制
+            const bruteForceCheckAfter = await checkBruteForceProtection(clientIP, env);
+            if (bruteForceCheckAfter.blocked) {
+                return {
+                    valid: false,
+                    response: new Response(generateLoginPage(bruteForceCheckAfter.message), {
+                        status: 429,
+                        headers: { 
+                            'Content-Type': 'text/html; charset=utf-8',
+                            'Retry-After': '900'
+                        }
+                    })
+                };
+            }
+            
             return {
                 valid: false,
                 response: new Response(generateLoginPage('密码错误，请重试'), {
@@ -1482,9 +1663,23 @@ async function checkPassword(request, env) {
     }
     
     // 需要登录
+    // 对于订阅链接，返回明确的错误信息
+    if (path.match(/^\/[^\/]+\/sub$/)) {
+        return {
+            valid: false,
+            response: new Response('访问被拒绝：订阅链接需要登录后才能访问。请先访问主页登录。', {
+                status: 401,
+                headers: { 
+                    'Content-Type': 'text/plain; charset=utf-8',
+                    'WWW-Authenticate': 'Basic realm="Login Required"'
+                }
+            })
+        };
+    }
+    
     return {
         valid: false,
-        response: new Response(generateLoginPage(), {
+        response: new Response(generateLoginPage('请先登录以访问此页面'), {
             status: 401,
             headers: { 'Content-Type': 'text/html; charset=utf-8' }
         })
