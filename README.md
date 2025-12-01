@@ -1,5 +1,22 @@
-# 服务器优选工具 - 简化版
+设置密码：
+在 Cloudflare Workers 后台，进入你的 Worker
+在 Settings → Variables 中添加环境变量：
+变量名：LOGIN_PASSWORD
+变量值：你的密码（例如：mypassword123）
+访问网站：
+首次访问会显示登录页面
+输入正确的密码后即可访问主页和生成订阅
+重置密码：
+在 Cloudflare Workers 后台修改 LOGIN_PASSWORD 环境变量
+删除该环境变量即可取消密码保护
+代码已更新，可直接部署到 Cloudflare Workers。
 
+为了获得完整的防暴力破解保护，建议：
+在 Cloudflare Workers 后台创建 KV Namespace
+在 Worker 设置中绑定 KV Namespace 为 AUTH_KV
+这样可以在多个 Worker 实例间共享防暴力破解数据
+
+# 服务器优选工具 - 简化版
 
 ## 功能特性
 
