@@ -560,6 +560,89 @@ async function fetchAndParseNewIPs(piu) {
     }
 }
 
+// 从自定义URL获取优选IP（yxURL功能）
+async function fetchPreferredIPsFromURL(yxURL, ipv4Enabled = true, ipv6Enabled = true, ispMobile = true, ispUnicom = true, ispTelecom = true) {
+    if (!yxURL) {
+        return [];
+    }
+    
+    try {
+        const response = await fetch(yxURL, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+        if (!response.ok) return [];
+        
+        const contentType = response.headers.get('content-type') || '';
+        let results = [];
+        
+        // 判断是HTML页面还是文本文件
+        if (contentType.includes('text/html')) {
+            // HTML格式，使用wetest解析方式
+            const html = await response.text();
+            const rowRegex = /<tr[\s\S]*?<\/tr>/g;
+            const cellRegex = /<td data-label="线路名称">(.+?)<\/td>[\s\S]*?<td data-label="优选地址">([\d.:a-fA-F]+)<\/td>[\s\S]*?<td data-label="数据中心">(.+?)<\/td>/;
+            
+            let match;
+            while ((match = rowRegex.exec(html)) !== null) {
+                const rowHtml = match[0];
+                const cellMatch = rowHtml.match(cellRegex);
+                if (cellMatch && cellMatch[1] && cellMatch[2]) {
+                    const colo = cellMatch[3] ? cellMatch[3].trim().replace(/<.*?>/g, '') : '';
+                    const ip = cellMatch[2].trim();
+                    // 检查IP版本
+                    const isIPv6 = ip.includes(':');
+                    if ((isIPv6 && !ipv6Enabled) || (!isIPv6 && !ipv4Enabled)) {
+                        continue;
+                    }
+                    results.push({
+                        isp: cellMatch[1].trim().replace(/<.*?>/g, ''),
+                        ip: ip,
+                        colo: colo
+                    });
+                }
+            }
+        } else {
+            // 文本格式，使用GitHub格式解析
+            const text = await response.text();
+            const lines = text.trim().replace(/\r/g, "").split('\n');
+            const regex = /^([^:]+):(\d+)#(.*)$/;
+            
+            for (const line of lines) {
+                const trimmedLine = line.trim();
+                if (!trimmedLine) continue;
+                const match = trimmedLine.match(regex);
+                if (match) {
+                    const ip = match[1];
+                    const isIPv6 = ip.includes(':');
+                    if ((isIPv6 && !ipv6Enabled) || (!isIPv6 && !ipv4Enabled)) {
+                        continue;
+                    }
+                    results.push({
+                        ip: ip,
+                        port: parseInt(match[2], 10),
+                        name: match[3].trim() || ip,
+                        isp: match[3].trim() || ip
+                    });
+                }
+            }
+        }
+        
+        // 按运营商筛选
+        if (results.length > 0) {
+            results = results.filter(item => {
+                const isp = item.isp || '';
+                if (isp.includes('移动') && !ispMobile) return false;
+                if (isp.includes('联通') && !ispUnicom) return false;
+                if (isp.includes('电信') && !ispTelecom) return false;
+                return true;
+            });
+        }
+        
+        return results;
+    } catch (error) {
+        console.error('从自定义URL获取优选IP失败:', error);
+        return [];
+    }
+}
+
 // 生成VLESS链接
 function generateLinksFromSource(list, user, workerDomain, disableNonTLS = false, customPath = '/') {
     const CF_HTTP_PORTS = [80, 8080, 8880, 2052, 2082, 2086, 2095];
@@ -786,7 +869,7 @@ function generateLinksFromNewIPs(list, user, workerDomain, customPath = '/') {
 }
 
 // 生成订阅内容
-async function handleSubscriptionRequest(request, user, customDomain, piu, ipv4Enabled, ipv6Enabled, ispMobile, ispUnicom, ispTelecom, evEnabled, etEnabled, vmEnabled, disableNonTLS, customPath) {
+async function handleSubscriptionRequest(request, user, customDomain, piu, yxURL, ipv4Enabled, ipv6Enabled, ispMobile, ispUnicom, ispTelecom, evEnabled, etEnabled, vmEnabled, disableNonTLS, customPath) {
     const url = new URL(request.url);
     const finalLinks = [];
     const workerDomain = url.hostname;  // workerDomain始终是请求的hostname
@@ -820,15 +903,37 @@ async function handleSubscriptionRequest(request, user, customDomain, piu, ipv4E
         await addNodesFromList(domainList);
     }
 
-    // 优选IP
+    // 优选IP（如果设置了自定义yxURL，优先使用自定义URL，否则使用默认wetest）
     if (epi) {
-        try {
-            const dynamicIPList = await fetchDynamicIPs(ipv4Enabled, ipv6Enabled, ispMobile, ispUnicom, ispTelecom);
-            if (dynamicIPList.length > 0) {
-                await addNodesFromList(dynamicIPList);
+        if (yxURL) {
+            // 使用自定义yxURL
+            try {
+                const customIPList = await fetchPreferredIPsFromURL(yxURL, ipv4Enabled, ipv6Enabled, ispMobile, ispUnicom, ispTelecom);
+                if (customIPList.length > 0) {
+                    await addNodesFromList(customIPList);
+                }
+            } catch (error) {
+                console.error('从自定义URL获取优选IP失败:', error);
+                // 如果自定义URL失败，回退到默认wetest
+                try {
+                    const dynamicIPList = await fetchDynamicIPs(ipv4Enabled, ipv6Enabled, ispMobile, ispUnicom, ispTelecom);
+                    if (dynamicIPList.length > 0) {
+                        await addNodesFromList(dynamicIPList);
+                    }
+                } catch (e) {
+                    console.error('获取动态IP失败:', e);
+                }
             }
-        } catch (error) {
-            console.error('获取动态IP失败:', error);
+        } else {
+            // 使用默认wetest
+            try {
+                const dynamicIPList = await fetchDynamicIPs(ipv4Enabled, ipv6Enabled, ispMobile, ispUnicom, ispTelecom);
+                if (dynamicIPList.length > 0) {
+                    await addNodesFromList(dynamicIPList);
+                }
+            } catch (error) {
+                console.error('获取动态IP失败:', error);
+            }
         }
     }
 
@@ -1336,7 +1441,13 @@ async function generateHomePage(scuValue, env) {
             <div class="form-group" id="githubUrlGroup" style="margin-top: 12px;">
                 <label>GitHub优选URL（可选）</label>
                 <input type="text" id="githubUrl" placeholder="留空则使用默认地址" style="font-size: 15px;">
-                <small style="display: block; margin-top: 6px; color: #86868b; font-size: 13px;">自定义优选IP列表来源URL，留空则使用默认地址</small>
+                <small style="display: block; margin-top: 6px; color: #86868b; font-size: 13px;">自定义GitHub优选IP列表来源URL，留空则使用默认地址</small>
+            </div>
+            
+            <div class="form-group" id="preferredIPsUrlGroup" style="margin-top: 12px;">
+                <label>优选IP来源URL (yxURL)（可选）</label>
+                <input type="text" id="preferredIPsUrl" placeholder="留空则使用默认wetest地址" style="font-size: 15px;">
+                <small style="display: block; margin-top: 6px; color: #86868b; font-size: 13px;">自定义优选IP来源URL，支持HTML页面或文本格式，留空则使用默认wetest地址</small>
             </div>
             
             <div class="form-group" style="margin-top: 24px;">
@@ -1519,6 +1630,7 @@ async function generateHomePage(scuValue, env) {
             const ispTelecom = document.getElementById('ispTelecom').checked;
             
             const githubUrl = document.getElementById('githubUrl').value.trim();
+            const preferredIPsUrl = document.getElementById('preferredIPsUrl').value.trim();
             
             const currentUrl = new URL(window.location.href);
             const baseUrl = currentUrl.origin;
@@ -1527,6 +1639,11 @@ async function generateHomePage(scuValue, env) {
             // 添加GitHub优选URL
             if (githubUrl) {
                 subscriptionUrl += \`&piu=\${encodeURIComponent(githubUrl)}\`;
+            }
+            
+            // 添加优选IP来源URL (yxURL)
+            if (preferredIPsUrl) {
+                subscriptionUrl += \`&yxURL=\${encodeURIComponent(preferredIPsUrl)}\`;
             }
             
             // 添加协议选择
@@ -1873,6 +1990,8 @@ export default {
             epi = url.searchParams.get('epi') !== 'no';
             egi = url.searchParams.get('egi') !== 'no';
             const piu = url.searchParams.get('piu') || defaultIPURL;
+            // 获取优选IP来源URL (yxURL)，支持环境变量或URL参数
+            const yxURL = url.searchParams.get('yxURL') || env?.yxURL || env?.YXURL || '';
             
             // 协议选择
             const evEnabled = url.searchParams.get('ev') === 'yes' || (url.searchParams.get('ev') === null && ev);
@@ -1894,7 +2013,7 @@ export default {
             // 自定义路径
             const customPath = url.searchParams.get('path') || '/';
             
-            return await handleSubscriptionRequest(request, uuid, domain, piu, ipv4Enabled, ipv6Enabled, ispMobile, ispUnicom, ispTelecom, evEnabled, etEnabled, vmEnabled, disableNonTLS, customPath);
+            return await handleSubscriptionRequest(request, uuid, domain, piu, yxURL, ipv4Enabled, ipv6Enabled, ispMobile, ispUnicom, ispTelecom, evEnabled, etEnabled, vmEnabled, disableNonTLS, customPath);
         }
         
         return new Response('Not Found', { status: 404 });
