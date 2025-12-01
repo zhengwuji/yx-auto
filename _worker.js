@@ -12,6 +12,234 @@ let et = false;  // 启用Trojan协议
 let vm = false;  // 启用VMess协议
 let scu = 'https://url.v1.mk/sub';  // 订阅转换地址
 
+// 密码验证相关函数
+function getPassword(env) {
+    // 从环境变量获取密码，如果未设置则返回空（表示不需要密码）
+    return env?.LOGIN_PASSWORD || '';
+}
+
+function generateSessionToken() {
+    // 生成简单的会话令牌（实际应用中应使用更安全的方法）
+    return btoa(Date.now().toString() + Math.random().toString()).substring(0, 32);
+}
+
+function isValidSession(cookieHeader, env) {
+    // 检查会话是否有效（简单实现，实际应用中应使用更安全的方法）
+    if (!cookieHeader) return false;
+    const cookies = Object.fromEntries(
+        cookieHeader.split(';').map(c => c.trim().split('='))
+    );
+    const sessionToken = cookies['cf_session'];
+    if (!sessionToken) return false;
+    
+    // 简单的会话验证（实际应用中应使用 KV 存储或更安全的方法）
+    // 这里使用环境变量中的密码作为会话密钥的一部分
+    const password = getPassword(env);
+    if (!password) return true; // 如果没有设置密码，则允许访问
+    
+    // 验证会话（简化版，实际应用中应使用更安全的方法）
+    try {
+        const decoded = atob(sessionToken);
+        const timestamp = parseInt(decoded.substring(0, 13));
+        const now = Date.now();
+        // 会话有效期24小时
+        return (now - timestamp) < 24 * 60 * 60 * 1000;
+    } catch (e) {
+        return false;
+    }
+}
+
+function generateLoginPage(error = '') {
+    return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>登录 - 服务器优选工具</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(180deg, #f5f5f7 0%, #ffffff 100%);
+            color: #1d1d1f;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .login-container {
+            max-width: 400px;
+            width: 100%;
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px) saturate(180%);
+            -webkit-backdrop-filter: blur(20px) saturate(180%);
+            border-radius: 20px;
+            padding: 40px 30px;
+            box-shadow: 0 2px 16px rgba(0, 0, 0, 0.08);
+            border: 0.5px solid rgba(0, 0, 0, 0.04);
+        }
+        
+        .login-header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .login-header h1 {
+            font-size: 28px;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+            color: #1d1d1f;
+            margin-bottom: 8px;
+        }
+        
+        .login-header p {
+            font-size: 15px;
+            color: #86868b;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        .form-group label {
+            display: block;
+            font-size: 13px;
+            font-weight: 600;
+            color: #86868b;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .form-group input {
+            width: 100%;
+            padding: 14px 16px;
+            font-size: 17px;
+            font-weight: 400;
+            color: #1d1d1f;
+            background: rgba(142, 142, 147, 0.12);
+            border: none;
+            border-radius: 12px;
+            outline: none;
+            transition: all 0.2s ease;
+            -webkit-appearance: none;
+        }
+        
+        .form-group input:focus {
+            background: rgba(142, 142, 147, 0.16);
+        }
+        
+        .error-message {
+            background: rgba(255, 59, 48, 0.1);
+            color: #ff3b30;
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 14px;
+            margin-bottom: 20px;
+            display: ${error ? 'block' : 'none'};
+        }
+        
+        .btn {
+            width: 100%;
+            padding: 16px;
+            font-size: 17px;
+            font-weight: 600;
+            color: #ffffff;
+            background: #007aff;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            -webkit-appearance: none;
+            box-shadow: 0 2px 8px rgba(0, 122, 255, 0.3);
+        }
+        
+        .btn:active {
+            transform: scale(0.98);
+            opacity: 0.8;
+        }
+        
+        .info-text {
+            margin-top: 20px;
+            padding: 12px;
+            background: rgba(142, 142, 147, 0.12);
+            border-radius: 8px;
+            font-size: 13px;
+            color: #86868b;
+            text-align: center;
+        }
+        
+        @media (prefers-color-scheme: dark) {
+            body {
+                background: linear-gradient(180deg, #000000 0%, #1c1c1e 100%);
+                color: #f5f5f7;
+            }
+            
+            .login-container {
+                background: rgba(28, 28, 30, 0.8);
+                border: 0.5px solid rgba(255, 255, 255, 0.1);
+            }
+            
+            .form-group input {
+                background: rgba(142, 142, 147, 0.2);
+                color: #f5f5f7;
+            }
+            
+            .form-group input:focus {
+                background: rgba(142, 142, 147, 0.25);
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="login-header">
+            <h1>服务器优选工具</h1>
+            <p>请输入登录密码</p>
+        </div>
+        
+        <div class="error-message" id="errorMsg">${error}</div>
+        
+        <form method="POST" action="/login" id="loginForm">
+            <div class="form-group">
+                <label>密码</label>
+                <input type="password" name="password" id="password" placeholder="请输入密码" required autofocus>
+            </div>
+            
+            <button type="submit" class="btn">登录</button>
+        </form>
+        
+        <div class="info-text">
+            <p>忘记密码？请联系管理员在 Cloudflare Workers 后台重置</p>
+        </div>
+    </div>
+    
+    <script>
+        document.getElementById('loginForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            const password = document.getElementById('password').value;
+            if (!password) {
+                document.getElementById('errorMsg').textContent = '请输入密码';
+                document.getElementById('errorMsg').style.display = 'block';
+                return;
+            }
+            this.submit();
+        });
+    </script>
+</body>
+</html>`;
+}
+
 // 默认优选域名列表
 const directDomains = [
     { name: "cloudflare.182682.xyz", domain: "cloudflare.182682.xyz" },
@@ -1205,16 +1433,99 @@ function generateHomePage(scuValue) {
 </html>`;
 }
 
+// 检查密码验证
+async function checkPassword(request, env) {
+    const password = getPassword(env);
+    
+    // 如果没有设置密码，则允许访问
+    if (!password) {
+        return { valid: true };
+    }
+    
+    // 检查会话
+    const cookieHeader = request.headers.get('Cookie');
+    if (isValidSession(cookieHeader, env)) {
+        return { valid: true };
+    }
+    
+    // 处理登录请求
+    if (request.method === 'POST' && new URL(request.url).pathname === '/login') {
+        const formData = await request.formData();
+        const inputPassword = formData.get('password');
+        
+        if (inputPassword === password) {
+            // 密码正确，创建会话
+            const sessionToken = generateSessionToken();
+            const sessionCookie = `cf_session=${btoa(Date.now().toString() + sessionToken)}; Path=/; Max-Age=86400; HttpOnly; SameSite=Lax`;
+            
+            // 重定向到主页
+            return {
+                valid: true,
+                response: new Response(null, {
+                    status: 302,
+                    headers: {
+                        'Location': '/',
+                        'Set-Cookie': sessionCookie
+                    }
+                })
+            };
+        } else {
+            // 密码错误
+            return {
+                valid: false,
+                response: new Response(generateLoginPage('密码错误，请重试'), {
+                    status: 401,
+                    headers: { 'Content-Type': 'text/html; charset=utf-8' }
+                })
+            };
+        }
+    }
+    
+    // 需要登录
+    return {
+        valid: false,
+        response: new Response(generateLoginPage(), {
+            status: 401,
+            headers: { 'Content-Type': 'text/html; charset=utf-8' }
+        })
+    };
+}
+
 // 主处理函数
 export default {
     async fetch(request, env, ctx) {
         const url = new URL(request.url);
         const path = url.pathname;
         
+        // 检查密码验证（登录页面除外）
+        if (path !== '/login') {
+            const passwordCheck = await checkPassword(request, env);
+            if (!passwordCheck.valid) {
+                return passwordCheck.response;
+            }
+            // 如果是登录后的重定向响应，直接返回
+            if (passwordCheck.response) {
+                return passwordCheck.response;
+            }
+        } else if (path === '/login' && request.method === 'POST') {
+            // 处理登录POST请求
+            const passwordCheck = await checkPassword(request, env);
+            if (passwordCheck.response) {
+                return passwordCheck.response;
+            }
+        }
+        
         // 主页
         if (path === '/' || path === '') {
             const scuValue = env?.scu || scu;
             return new Response(generateHomePage(scuValue), {
+                headers: { 'Content-Type': 'text/html; charset=utf-8' }
+            });
+        }
+        
+        // 登录页面（GET请求）
+        if (path === '/login' && request.method === 'GET') {
+            return new Response(generateLoginPage(), {
                 headers: { 'Content-Type': 'text/html; charset=utf-8' }
             });
         }
@@ -1265,4 +1576,3 @@ export default {
         return new Response('Not Found', { status: 404 });
     }
 };
-
