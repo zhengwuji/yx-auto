@@ -68,110 +68,121 @@ async function checkBruteForceProtection(ip, env) {
     
     // 尝试使用 KV 存储
     if (env && env.AUTH_KV) {
-        const kv = env.AUTH_KV;
-        const attemptKey = `auth_attempts:${ip}`;
-        const lockoutKey = `auth_lockout:${ip}`;
-        
-        // 检查是否被锁定
-        const lockoutData = await kv.get(lockoutKey);
-        if (lockoutData) {
-            const lockoutTime = parseInt(lockoutData);
-            const now = Date.now();
-            if (now < lockoutTime) {
-                const remainingMinutes = Math.ceil((lockoutTime - now) / 60000);
-                return {
-                    blocked: true,
-                    message: `登录尝试次数过多，请 ${remainingMinutes} 分钟后再试`
-                };
-            } else {
-                // 锁定时间已过，清除锁定
-                await kv.delete(lockoutKey);
-                await kv.delete(attemptKey);
-            }
-        }
-        
-        // 检查尝试次数
-        const attemptsData = await kv.get(attemptKey);
-        if (attemptsData) {
-            const attempts = JSON.parse(attemptsData);
-            const now = Date.now();
+        try {
+            const kv = env.AUTH_KV;
+            const attemptKey = `auth_attempts:${ip}`;
+            const lockoutKey = `auth_lockout:${ip}`;
             
-            // 清理过期的尝试记录（超过1分钟）
-            const recentAttempts = attempts.filter(t => now - t < ATTEMPT_WINDOW);
-            
-            if (recentAttempts.length >= MAX_ATTEMPTS) {
-                // 达到最大尝试次数，锁定账户
-                const lockoutUntil = now + LOCKOUT_TIME;
-                await kv.put(lockoutKey, lockoutUntil.toString());
-                await kv.delete(attemptKey);
-                return {
-                    blocked: true,
-                    message: `登录尝试次数过多，账户已被锁定 15 分钟`
-                };
+            // 检查是否被锁定
+            try {
+                const lockoutData = await kv.get(lockoutKey);
+                if (lockoutData) {
+                    const lockoutTime = parseInt(lockoutData);
+                    const now = Date.now();
+                    if (now < lockoutTime) {
+                        const remainingMinutes = Math.ceil((lockoutTime - now) / 60000);
+                        return {
+                            blocked: true,
+                            message: `登录尝试次数过多，请 ${remainingMinutes} 分钟后再试`
+                        };
+                    } else {
+                        // 锁定时间已过，清除锁定
+                        try {
+                            await kv.delete(lockoutKey);
+                            await kv.delete(attemptKey);
+                        } catch (e) {
+                            // 忽略删除错误
+                            console.error('清除锁定记录错误:', e);
+                        }
+                    }
+                }
+            } catch (e) {
+                console.error('检查锁定状态错误:', e);
             }
             
-            // 更新尝试记录
-            recentAttempts.push(now);
-            await kv.put(attemptKey, JSON.stringify(recentAttempts), { expirationTtl: Math.ceil(LOCKOUT_TIME / 1000) });
+            // 检查尝试次数
+            try {
+                const attemptsData = await kv.get(attemptKey);
+                if (attemptsData) {
+                    const attempts = JSON.parse(attemptsData);
+                    const now = Date.now();
+                    
+                    // 清理过期的尝试记录（超过1分钟）
+                    const recentAttempts = attempts.filter(t => now - t < ATTEMPT_WINDOW);
+                    
+                    if (recentAttempts.length >= MAX_ATTEMPTS) {
+                        // 达到最大尝试次数，锁定账户
+                        const lockoutUntil = now + LOCKOUT_TIME;
+                        try {
+                            await kv.put(lockoutKey, lockoutUntil.toString());
+                            await kv.delete(attemptKey);
+                        } catch (e) {
+                            console.error('设置锁定错误:', e);
+                        }
+                        return {
+                            blocked: true,
+                            message: `登录尝试次数过多，账户已被锁定 15 分钟`
+                        };
+                    }
+                    
+                    // 更新尝试记录
+                    recentAttempts.push(now);
+                    try {
+                        await kv.put(attemptKey, JSON.stringify(recentAttempts), { expirationTtl: Math.ceil(LOCKOUT_TIME / 1000) });
+                    } catch (e) {
+                        console.error('更新尝试记录错误:', e);
+                    }
+                }
+            } catch (e) {
+                console.error('检查尝试次数错误:', e);
+            }
+            
+            return { blocked: false };
+        } catch (e) {
+            // KV 操作失败，记录错误但不阻止访问
+            console.error('KV 操作错误:', e);
+            return { blocked: false };
         }
-        
-        return { blocked: false };
     }
     
-    // 如果没有 KV 存储，使用简单的内存缓存（仅限单实例）
-    // 注意：这在多实例环境下不会工作，建议使用 KV
-    if (!global.authAttempts) {
-        global.authAttempts = new Map();
-    }
-    
-    const now = Date.now();
-    const attempts = global.authAttempts.get(ip) || [];
-    
-    // 清理过期的尝试记录
-    const recentAttempts = attempts.filter(t => now - t < ATTEMPT_WINDOW);
-    
-    if (recentAttempts.length >= MAX_ATTEMPTS) {
-        return {
-            blocked: true,
-            message: `登录尝试次数过多，请稍后再试`
-        };
-    }
-    
+    // 如果没有 KV 存储，无法跨实例共享数据，直接返回允许
+    // 建议配置 KV 存储以获得完整的防暴力破解保护
+    // 注意：Cloudflare Workers 是无状态的，不能使用 global 对象
     return { blocked: false };
 }
 
 // 记录失败的登录尝试
 async function recordFailedAttempt(ip, env) {
     if (env && env.AUTH_KV) {
-        const kv = env.AUTH_KV;
-        const attemptKey = `auth_attempts:${ip}`;
-        const attemptsData = await kv.get(attemptKey);
-        const attempts = attemptsData ? JSON.parse(attemptsData) : [];
-        attempts.push(Date.now());
-        await kv.put(attemptKey, JSON.stringify(attempts), { expirationTtl: 900 }); // 15分钟过期
-    } else {
-        // 内存缓存
-        if (!global.authAttempts) {
-            global.authAttempts = new Map();
+        try {
+            const kv = env.AUTH_KV;
+            const attemptKey = `auth_attempts:${ip}`;
+            const attemptsData = await kv.get(attemptKey);
+            const attempts = attemptsData ? JSON.parse(attemptsData) : [];
+            attempts.push(Date.now());
+            await kv.put(attemptKey, JSON.stringify(attempts), { expirationTtl: 900 }); // 15分钟过期
+        } catch (e) {
+            // 忽略记录失败的错误，不影响登录流程
+            console.error('记录失败尝试错误:', e);
         }
-        const attempts = global.authAttempts.get(ip) || [];
-        attempts.push(Date.now());
-        global.authAttempts.set(ip, attempts);
     }
+    // 如果没有 KV 存储，无法记录尝试次数
+    // 建议配置 KV 存储以获得完整的防暴力破解保护
 }
 
 // 清除成功的登录尝试记录
 async function clearFailedAttempts(ip, env) {
     if (env && env.AUTH_KV) {
-        const kv = env.AUTH_KV;
-        await kv.delete(`auth_attempts:${ip}`);
-        await kv.delete(`auth_lockout:${ip}`);
-    } else {
-        // 内存缓存
-        if (global.authAttempts) {
-            global.authAttempts.delete(ip);
+        try {
+            const kv = env.AUTH_KV;
+            await kv.delete(`auth_attempts:${ip}`);
+            await kv.delete(`auth_lockout:${ip}`);
+        } catch (e) {
+            // 忽略清除失败的错误
+            console.error('清除失败尝试记录错误:', e);
         }
     }
+    // 如果没有 KV 存储，无需清除
 }
 
 function generateLoginPage(error = '') {
@@ -1596,53 +1607,13 @@ async function checkPassword(request, env) {
     
     // 处理登录请求
     if (request.method === 'POST' && path === '/login') {
-        // 检查防暴力破解保护
-        const bruteForceCheck = await checkBruteForceProtection(clientIP, env);
-        if (bruteForceCheck.blocked) {
-            return {
-                valid: false,
-                response: new Response(generateLoginPage(bruteForceCheck.message), {
-                    status: 429,
-                    headers: { 
-                        'Content-Type': 'text/html; charset=utf-8',
-                        'Retry-After': '900'
-                    }
-                })
-            };
-        }
-        
-        const formData = await request.formData();
-        const inputPassword = formData.get('password');
-        
-        if (inputPassword === password) {
-            // 密码正确，清除失败尝试记录
-            await clearFailedAttempts(clientIP, env);
-            
-            // 创建会话
-            const sessionToken = generateSessionToken();
-            const sessionCookie = `cf_session=${btoa(Date.now().toString() + sessionToken)}; Path=/; Max-Age=86400; HttpOnly; SameSite=Lax`;
-            
-            // 重定向到主页
-            return {
-                valid: true,
-                response: new Response(null, {
-                    status: 302,
-                    headers: {
-                        'Location': '/',
-                        'Set-Cookie': sessionCookie
-                    }
-                })
-            };
-        } else {
-            // 密码错误，记录失败尝试
-            await recordFailedAttempt(clientIP, env);
-            
-            // 再次检查是否达到限制
-            const bruteForceCheckAfter = await checkBruteForceProtection(clientIP, env);
-            if (bruteForceCheckAfter.blocked) {
+        try {
+            // 检查防暴力破解保护
+            const bruteForceCheck = await checkBruteForceProtection(clientIP, env);
+            if (bruteForceCheck.blocked) {
                 return {
                     valid: false,
-                    response: new Response(generateLoginPage(bruteForceCheckAfter.message), {
+                    response: new Response(generateLoginPage(bruteForceCheck.message), {
                         status: 429,
                         headers: { 
                             'Content-Type': 'text/html; charset=utf-8',
@@ -1652,10 +1623,77 @@ async function checkPassword(request, env) {
                 };
             }
             
+            const formData = await request.formData();
+            const inputPassword = formData.get('password');
+            
+            if (inputPassword === password) {
+                // 密码正确，清除失败尝试记录
+                try {
+                    await clearFailedAttempts(clientIP, env);
+                } catch (e) {
+                    // 忽略清除失败的错误
+                    console.error('清除失败尝试记录错误:', e);
+                }
+                
+                // 创建会话
+                const sessionToken = generateSessionToken();
+                const sessionCookie = `cf_session=${btoa(Date.now().toString() + sessionToken)}; Path=/; Max-Age=86400; HttpOnly; SameSite=Lax`;
+                
+                // 重定向到主页
+                return {
+                    valid: true,
+                    response: new Response(null, {
+                        status: 302,
+                        headers: {
+                            'Location': '/',
+                            'Set-Cookie': sessionCookie
+                        }
+                    })
+                };
+            } else {
+                // 密码错误，记录失败尝试
+                try {
+                    await recordFailedAttempt(clientIP, env);
+                } catch (e) {
+                    // 忽略记录失败的错误
+                    console.error('记录失败尝试错误:', e);
+                }
+                
+                // 再次检查是否达到限制
+                try {
+                    const bruteForceCheckAfter = await checkBruteForceProtection(clientIP, env);
+                    if (bruteForceCheckAfter.blocked) {
+                        return {
+                            valid: false,
+                            response: new Response(generateLoginPage(bruteForceCheckAfter.message), {
+                                status: 429,
+                                headers: { 
+                                    'Content-Type': 'text/html; charset=utf-8',
+                                    'Retry-After': '900'
+                                }
+                            })
+                        };
+                    }
+                } catch (e) {
+                    // 忽略检查错误，继续返回密码错误
+                    console.error('检查防暴力破解错误:', e);
+                }
+                
+                return {
+                    valid: false,
+                    response: new Response(generateLoginPage('密码错误，请重试'), {
+                        status: 401,
+                        headers: { 'Content-Type': 'text/html; charset=utf-8' }
+                    })
+                };
+            }
+        } catch (e) {
+            // 处理登录过程中的任何错误
+            console.error('登录处理错误:', e);
             return {
                 valid: false,
-                response: new Response(generateLoginPage('密码错误，请重试'), {
-                    status: 401,
+                response: new Response(generateLoginPage('登录处理出错，请重试'), {
+                    status: 500,
                     headers: { 'Content-Type': 'text/html; charset=utf-8' }
                 })
             };
@@ -1689,26 +1727,44 @@ async function checkPassword(request, env) {
 // 主处理函数
 export default {
     async fetch(request, env, ctx) {
-        const url = new URL(request.url);
-        const path = url.pathname;
-        
-        // 检查密码验证（登录页面除外）
-        if (path !== '/login') {
-            const passwordCheck = await checkPassword(request, env);
-            if (!passwordCheck.valid) {
-                return passwordCheck.response;
+        try {
+            const url = new URL(request.url);
+            const path = url.pathname;
+            
+            // 检查密码验证（登录页面除外）
+            if (path !== '/login') {
+                try {
+                    const passwordCheck = await checkPassword(request, env);
+                    if (!passwordCheck.valid) {
+                        return passwordCheck.response;
+                    }
+                    // 如果是登录后的重定向响应，直接返回
+                    if (passwordCheck.response) {
+                        return passwordCheck.response;
+                    }
+                } catch (e) {
+                    console.error('密码验证错误:', e);
+                    // 如果验证出错，返回错误页面
+                    return new Response('服务器错误，请稍后重试', {
+                        status: 500,
+                        headers: { 'Content-Type': 'text/plain; charset=utf-8' }
+                    });
+                }
+            } else if (path === '/login' && request.method === 'POST') {
+                // 处理登录POST请求
+                try {
+                    const passwordCheck = await checkPassword(request, env);
+                    if (passwordCheck.response) {
+                        return passwordCheck.response;
+                    }
+                } catch (e) {
+                    console.error('登录处理错误:', e);
+                    return new Response(generateLoginPage('登录处理出错，请重试'), {
+                        status: 500,
+                        headers: { 'Content-Type': 'text/html; charset=utf-8' }
+                    });
+                }
             }
-            // 如果是登录后的重定向响应，直接返回
-            if (passwordCheck.response) {
-                return passwordCheck.response;
-            }
-        } else if (path === '/login' && request.method === 'POST') {
-            // 处理登录POST请求
-            const passwordCheck = await checkPassword(request, env);
-            if (passwordCheck.response) {
-                return passwordCheck.response;
-            }
-        }
         
         // 主页
         if (path === '/' || path === '') {
@@ -1769,5 +1825,13 @@ export default {
         }
         
         return new Response('Not Found', { status: 404 });
+        } catch (e) {
+            // 捕获所有未处理的错误
+            console.error('Worker 错误:', e);
+            return new Response('服务器内部错误，请稍后重试', {
+                status: 500,
+                headers: { 'Content-Type': 'text/plain; charset=utf-8' }
+            });
+        }
     }
 };
