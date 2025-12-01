@@ -23,6 +23,48 @@ function generateSessionToken() {
     return btoa(Date.now().toString() + Math.random().toString()).substring(0, 32);
 }
 
+// 生成订阅token（永久有效）
+// 使用密码的哈希值作为token的基础，确保只有登录用户才能生成有效token
+async function generateSubscriptionToken(env) {
+    const password = getPassword(env);
+    if (!password) {
+        // 如果没有设置密码，返回空token（表示不需要验证）
+        return '';
+    }
+    // 使用密码生成一个稳定的token
+    // 使用简单的哈希方法（实际应用中可以使用更安全的方法）
+    const tokenData = password + 'subscription_token_salt';
+    // 生成token（基于密码，确保只有知道密码的人才能生成）
+    const hash = await simpleHash(tokenData);
+    return hash.substring(0, 48).replace(/[+/=]/g, '');
+}
+
+// 简单的哈希函数（用于生成token）
+async function simpleHash(str) {
+    // 使用Web Crypto API生成哈希
+    const encoder = new TextEncoder();
+    const data = encoder.encode(str);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    return btoa(hashHex);
+}
+
+// 验证订阅token
+async function isValidSubscriptionToken(token, env) {
+    const password = getPassword(env);
+    if (!password) {
+        // 如果没有设置密码，任何token都有效（或不需要token）
+        return true;
+    }
+    if (!token) {
+        return false;
+    }
+    // 重新生成token并比较
+    const expectedToken = await generateSubscriptionToken(env);
+    return token === expectedToken;
+}
+
 function isValidSession(cookieHeader, env) {
     // 检查会话是否有效（简单实现，实际应用中应使用更安全的方法）
     if (!cookieHeader) return false;
@@ -913,8 +955,10 @@ function generateQuantumultConfig(links) {
 }
 
 // 生成iOS 26风格的主页
-function generateHomePage(scuValue) {
+async function generateHomePage(scuValue, env) {
     const scu = scuValue || 'https://url.v1.mk/sub';
+    // 生成订阅token（永久有效）
+    const subscriptionToken = await generateSubscriptionToken(env);
     return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -1379,6 +1423,9 @@ function generateHomePage(scuValue) {
     </div>
     
     <script>
+        // 订阅token（永久有效）
+        const SUBSCRIPTION_TOKEN = "${subscriptionToken}";
+        
         let switches = {
             switchDomain: true,
             switchIP: true,
@@ -1499,6 +1546,11 @@ function generateHomePage(scuValue) {
             // 添加自定义路径
             if (customPath && customPath !== '/') {
                 subscriptionUrl += \`&path=\${encodeURIComponent(customPath)}\`;
+            }
+            
+            // 添加订阅token（永久有效）
+            if (SUBSCRIPTION_TOKEN) {
+                subscriptionUrl += \`&token=\${encodeURIComponent(SUBSCRIPTION_TOKEN)}\`;
             }
             
             let finalUrl = subscriptionUrl;
@@ -1700,19 +1752,39 @@ async function checkPassword(request, env) {
         }
     }
     
-    // 需要登录
-    // 对于订阅链接，返回明确的错误信息
+    // 对于订阅链接，检查token而不是会话
     if (path.match(/^\/[^\/]+\/sub$/)) {
-        return {
-            valid: false,
-            response: new Response('访问被拒绝：订阅链接需要登录后才能访问。请先访问主页登录。', {
-                status: 401,
-                headers: { 
-                    'Content-Type': 'text/plain; charset=utf-8',
-                    'WWW-Authenticate': 'Basic realm="Login Required"'
-                }
-            })
-        };
+        const token = url.searchParams.get('token');
+        try {
+            const isValid = await isValidSubscriptionToken(token, env);
+            if (isValid) {
+                // token有效，允许访问订阅
+                return { valid: true };
+            } else {
+                // token无效或不存在，需要登录
+                return {
+                    valid: false,
+                    response: new Response('访问被拒绝：订阅链接需要有效的token。请先登录并生成新的订阅链接。', {
+                        status: 401,
+                        headers: { 
+                            'Content-Type': 'text/plain; charset=utf-8',
+                            'WWW-Authenticate': 'Basic realm="Login Required"'
+                        }
+                    })
+                };
+            }
+        } catch (e) {
+            console.error('验证订阅token错误:', e);
+            return {
+                valid: false,
+                response: new Response('访问被拒绝：订阅链接验证失败。请先登录并生成新的订阅链接。', {
+                    status: 401,
+                    headers: { 
+                        'Content-Type': 'text/plain; charset=utf-8'
+                    }
+                })
+            };
+        }
     }
     
     return {
@@ -1769,7 +1841,8 @@ export default {
         // 主页
         if (path === '/' || path === '') {
             const scuValue = env?.scu || scu;
-            return new Response(generateHomePage(scuValue), {
+            const homePage = await generateHomePage(scuValue, env);
+            return new Response(homePage, {
                 headers: { 'Content-Type': 'text/html; charset=utf-8' }
             });
         }
