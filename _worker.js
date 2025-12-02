@@ -621,9 +621,13 @@ function generateLoginPage(error = '') {
             letter-spacing: 0.5px;
         }
         
+        .form-group {
+            position: relative;
+        }
+        
         .form-group input {
             width: 100%;
-            padding: 14px 16px;
+            padding: 14px 50px 14px 16px;
             font-size: 17px;
             font-weight: 400;
             color: #1d1d1f;
@@ -637,6 +641,33 @@ function generateLoginPage(error = '') {
         
         .form-group input:focus {
             background: rgba(142, 142, 147, 0.16);
+        }
+        
+        .password-toggle {
+            position: absolute;
+            right: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            color: #86868b;
+            cursor: pointer;
+            padding: 8px;
+            font-size: 18px;
+            line-height: 1;
+            transition: color 0.2s ease;
+            -webkit-appearance: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .password-toggle:hover {
+            color: #1d1d1f;
+        }
+        
+        .password-toggle:active {
+            opacity: 0.6;
         }
         
         .error-message {
@@ -709,6 +740,14 @@ function generateLoginPage(error = '') {
             .form-group input:focus {
                 background: rgba(142, 142, 147, 0.25);
             }
+            
+            .password-toggle {
+                color: #86868b;
+            }
+            
+            .password-toggle:hover {
+                color: #f5f5f7;
+            }
         }
     </style>
 </head>
@@ -729,6 +768,7 @@ function generateLoginPage(error = '') {
             <div class="form-group">
                 <label>密码</label>
                 <input type="password" name="password" id="password" placeholder="请输入密码" required autofocus>
+                <button type="button" class="password-toggle" id="passwordToggle" aria-label="显示密码">👁️</button>
             </div>
             
             <button type="submit" class="btn">登录</button>
@@ -741,6 +781,22 @@ function generateLoginPage(error = '') {
     </div>
     
     <script>
+        // 显示/隐藏密码功能
+        const passwordInput = document.getElementById('password');
+        const passwordToggle = document.getElementById('passwordToggle');
+        
+        passwordToggle.addEventListener('click', function() {
+            if (passwordInput.type === 'password') {
+                passwordInput.type = 'text';
+                passwordToggle.textContent = '🙈';
+                passwordToggle.setAttribute('aria-label', '隐藏密码');
+            } else {
+                passwordInput.type = 'password';
+                passwordToggle.textContent = '👁️';
+                passwordToggle.setAttribute('aria-label', '显示密码');
+            }
+        });
+        
         document.getElementById('loginForm').addEventListener('submit', function(e) {
             e.preventDefault();
             const password = document.getElementById('password').value;
