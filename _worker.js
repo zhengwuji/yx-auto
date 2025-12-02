@@ -227,6 +227,250 @@ async function clearFailedAttempts(ip, env) {
     // 如果没有 KV 存储，无需清除
 }
 
+// 访问者IP记录相关函数
+// 记录所有访问者IP（包括登录失败的IP）
+// KV存储结构：
+// - visitor_ip_record:{IP} - 单个访问者IP详细记录（JSON对象，包含ip, firstSeen, lastSeen, loginFailed, accessCount）
+// - visitor_ip_index - 访问者IP索引列表（JSON数组，包含所有IP的基本信息）
+// 每个IP记录保存3天
+
+const VISITOR_IP_STORAGE_DAYS = 3; // IP记录保存天数
+const VISITOR_IP_TTL = VISITOR_IP_STORAGE_DAYS * 24 * 60 * 60; // 3天的秒数
+const MAX_VISITOR_IP_RECORDS = 8000; // 最大访问者IP记录数（约4-5MB，留有余量）
+const VISITOR_CLEANUP_TARGET_RECORDS = 5000; // 清理后的目标记录数
+const VISITOR_CLEANUP_BATCH_SIZE = 500; // 每次清理的批次大小
+
+// 记录访问者IP
+async function recordVisitorIP(request, env, loginFailed = false) {
+    const clientIP = getClientIP(request);
+    if (clientIP === 'unknown') {
+        return; // 不记录未知IP
+    }
+    
+    const timestamp = Date.now();
+    
+    try {
+        if (env && env.AUTH_KV) {
+            const kv = env.AUTH_KV;
+            
+            // 将每个访问者IP记录单独存储在KV中
+            const ipRecordKey = `visitor_ip_record:${clientIP}`;
+            const existingRecordData = await kv.get(ipRecordKey);
+            
+            if (!existingRecordData) {
+                // 新IP，创建记录
+                const ipRecord = {
+                    ip: clientIP,
+                    firstSeen: timestamp,
+                    lastSeen: timestamp,
+                    loginFailed: loginFailed,
+                    accessCount: 1,
+                    lastAccess: timestamp
+                };
+                await kv.put(ipRecordKey, JSON.stringify(ipRecord), { expirationTtl: VISITOR_IP_TTL });
+            } else {
+                // 已存在的IP，更新最后访问时间和访问次数
+                const existingRecord = JSON.parse(existingRecordData);
+                existingRecord.lastSeen = timestamp;
+                existingRecord.lastAccess = timestamp;
+                existingRecord.accessCount = (existingRecord.accessCount || 0) + 1;
+                // 如果有登录失败，标记为登录失败
+                if (loginFailed) {
+                    existingRecord.loginFailed = true;
+                }
+                await kv.put(ipRecordKey, JSON.stringify(existingRecord), { expirationTtl: VISITOR_IP_TTL });
+            }
+            
+            // 更新IP索引列表（用于快速查询所有IP）
+            const ipIndexKey = 'visitor_ip_index';
+            const ipIndexData = await kv.get(ipIndexKey);
+            let ipIndex = ipIndexData ? JSON.parse(ipIndexData) : [];
+            
+            // 移除超过3天的IP索引
+            const threeDaysAgo = timestamp - VISITOR_IP_STORAGE_DAYS * 24 * 60 * 60 * 1000;
+            ipIndex = ipIndex.filter(item => item.timestamp > threeDaysAgo);
+            
+            // 检查IP是否已在索引中
+            const existingIndex = ipIndex.findIndex(item => item.ip === clientIP);
+            if (existingIndex >= 0) {
+                // 更新现有IP的时间戳
+                ipIndex[existingIndex].timestamp = timestamp;
+                ipIndex[existingIndex].lastSeen = timestamp;
+                if (loginFailed) {
+                    ipIndex[existingIndex].loginFailed = true;
+                }
+            } else {
+                // 添加新IP到索引（同IP不重复添加）
+                ipIndex.push({
+                    ip: clientIP,
+                    timestamp: timestamp,
+                    firstSeen: timestamp,
+                    lastSeen: timestamp,
+                    loginFailed: loginFailed
+                });
+            }
+            
+            // 保存索引列表（3天过期）
+            await kv.put(ipIndexKey, JSON.stringify(ipIndex), { expirationTtl: VISITOR_IP_TTL });
+            
+            // 检查并自动清理旧IP记录（如果超过5MB限制）
+            if (ipIndex.length > MAX_VISITOR_IP_RECORDS) {
+                // 异步清理，不阻塞当前请求
+                cleanupOldVisitorIPRecords(kv).catch(e => {
+                    console.error('自动清理访问者IP失败:', e);
+                });
+            }
+        }
+    } catch (e) {
+        // 忽略记录错误，不影响正常功能
+        console.error('记录访问者IP错误:', e);
+    }
+}
+
+// 自动清理访问者IP记录：当超过5MB时，按时间戳从旧到新清理
+async function cleanupOldVisitorIPRecords(kv) {
+    try {
+        const ipIndexKey = 'visitor_ip_index';
+        const ipIndexData = await kv.get(ipIndexKey);
+        
+        if (!ipIndexData) {
+            return;
+        }
+        
+        let ipIndex = JSON.parse(ipIndexData);
+        
+        if (ipIndex.length <= MAX_VISITOR_IP_RECORDS) {
+            return;
+        }
+        
+        // 按时间戳从旧到新排序
+        ipIndex.sort((a, b) => a.timestamp - b.timestamp);
+        
+        // 计算需要删除的记录数
+        const recordsToDelete = ipIndex.length - VISITOR_CLEANUP_TARGET_RECORDS;
+        
+        if (recordsToDelete <= 0) {
+            return;
+        }
+        
+        console.log(`开始清理访问者IP记录：当前记录数 ${ipIndex.length}，将删除 ${recordsToDelete} 条最旧记录`);
+        
+        const toDelete = ipIndex.slice(0, recordsToDelete);
+        const toKeep = ipIndex.slice(recordsToDelete);
+        
+        // 删除旧的IP详细记录
+        let deletedCount = 0;
+        let failedCount = 0;
+        
+        for (const ipItem of toDelete) {
+            try {
+                const ipRecordKey = `visitor_ip_record:${ipItem.ip}`;
+                await kv.delete(ipRecordKey);
+                deletedCount++;
+                
+                if (deletedCount % VISITOR_CLEANUP_BATCH_SIZE === 0) {
+                    console.log(`清理进度：已删除 ${deletedCount}/${recordsToDelete} 条旧访问者IP记录...`);
+                }
+            } catch (e) {
+                failedCount++;
+                console.error(`删除访问者IP记录失败 ${ipItem.ip}:`, e);
+            }
+        }
+        
+        // 更新索引列表
+        await kv.put(ipIndexKey, JSON.stringify(toKeep), { expirationTtl: VISITOR_IP_TTL });
+        
+        console.log(`访问者IP记录清理完成：成功删除 ${deletedCount} 条，失败 ${failedCount} 条，保留了 ${toKeep.length} 条最新记录`);
+    } catch (e) {
+        console.error('清理访问者IP记录错误:', e);
+    }
+}
+
+// 获取访问者IP列表和KV使用量
+async function getVisitorIPsAndKVUsage(env) {
+    try {
+        if (env && env.AUTH_KV) {
+            const kv = env.AUTH_KV;
+            
+            // 获取访问者IP索引列表
+            const ipIndexKey = 'visitor_ip_index';
+            const ipIndexData = await kv.get(ipIndexKey);
+            let ipIndex = ipIndexData ? JSON.parse(ipIndexData) : [];
+            
+            // 清理过期IP（超过3天）
+            const now = Date.now();
+            const threeDaysAgo = now - VISITOR_IP_STORAGE_DAYS * 24 * 60 * 60 * 1000;
+            const originalLength = ipIndex.length;
+            
+            // 验证每个IP记录是否仍然存在于KV中
+            const validIPs = [];
+            for (const ipItem of ipIndex) {
+                if (ipItem.timestamp > threeDaysAgo) {
+                    const ipRecordKey = `visitor_ip_record:${ipItem.ip}`;
+                    const ipRecordData = await kv.get(ipRecordKey);
+                    if (ipRecordData) {
+                        try {
+                            const ipRecord = JSON.parse(ipRecordData);
+                            validIPs.push({
+                                ip: ipItem.ip,
+                                timestamp: ipItem.timestamp,
+                                firstSeen: ipRecord.firstSeen || ipItem.firstSeen || ipItem.timestamp,
+                                lastSeen: ipRecord.lastSeen || ipItem.lastSeen || ipItem.timestamp,
+                                loginFailed: ipRecord.loginFailed || ipItem.loginFailed || false,
+                                accessCount: ipRecord.accessCount || 1
+                            });
+                        } catch (e) {
+                            validIPs.push({
+                                ...ipItem,
+                                lastSeen: ipItem.lastSeen || ipItem.timestamp,
+                                firstSeen: ipItem.firstSeen || ipItem.timestamp
+                            });
+                        }
+                    }
+                }
+            }
+            
+            if (validIPs.length < originalLength) {
+                await kv.put(ipIndexKey, JSON.stringify(validIPs), { expirationTtl: VISITOR_IP_TTL });
+            }
+            
+            // 按最后访问时间排序（从新到旧）
+            validIPs.sort((a, b) => {
+                const lastSeenA = a.lastSeen || a.timestamp;
+                const lastSeenB = b.lastSeen || b.timestamp;
+                return lastSeenB - lastSeenA;
+            });
+            
+            // 估算KV使用量（每个IP记录约500-800字节）
+            const estimatedBytesPerRecord = 650;
+            const estimatedKVUsage = validIPs.length * estimatedBytesPerRecord;
+            const estimatedKVUsageMB = (estimatedKVUsage / 1024 / 1024).toFixed(2);
+            
+            return {
+                visitorIPs: validIPs.slice(0, 100), // 最多返回100个IP
+                totalVisitorIPs: validIPs.length,
+                kvUsageMB: parseFloat(estimatedKVUsageMB),
+                kvUsageBytes: estimatedKVUsage
+            };
+        }
+        
+        return {
+            visitorIPs: [],
+            totalVisitorIPs: 0,
+            kvUsageMB: 0,
+            kvUsageBytes: 0
+        };
+    } catch (e) {
+        console.error('获取访问者IP列表错误:', e);
+        return {
+            visitorIPs: [],
+            totalVisitorIPs: 0,
+            kvUsageMB: 0,
+            kvUsageBytes: 0
+        };
+    }
+}
+
 // 订阅统计相关函数
 // 记录订阅访问
 // KV存储结构：
@@ -1970,6 +2214,10 @@ async function generateHomePage(scuValue, env) {
                 background: rgba(142, 142, 147, 0.3);
                 color: #ffffff;
             }
+            
+            #visitorIPCount {
+                color: #5ac8fa !important;
+            }
         }
     </style>
 </head>
@@ -2007,6 +2255,33 @@ async function generateHomePage(scuValue, env) {
                         <option value="">加载中...</option>
                     </select>
                 </div>
+            </div>
+        </div>
+        
+        <div class="stats-card" id="kvUsageCard">
+            <div class="stats-title">💾 KV存储空间</div>
+            <div class="loading" id="kvUsageLoading">加载中...</div>
+            <div id="kvUsageContent" style="display: none;">
+                <div class="stat-item" style="margin-bottom: 0;">
+                    <span class="stat-value" id="kvUsageValue">0</span>
+                    <span class="stat-label">MB / 5MB</span>
+                </div>
+                <div style="margin-top: 12px; width: 100%; height: 8px; background: rgba(142, 142, 147, 0.12); border-radius: 4px; overflow: hidden;">
+                    <div id="kvUsageBar" style="height: 100%; background: #007aff; border-radius: 4px; transition: width 0.3s ease; width: 0%;"></div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="stats-card" id="visitorCard">
+            <div class="stats-title">🌐 访问者IP列表</div>
+            <div class="loading" id="visitorLoading">加载中...</div>
+            <div id="visitorContent" style="display: none;">
+                <div style="margin-bottom: 12px; font-size: 13px; color: #86868b; text-align: center;">
+                    共 <span id="visitorIPCount" style="font-weight: 600; color: #007aff;">0</span> 个访问者IP（保存3天）
+                </div>
+                <select class="ip-select" id="visitorIPList" disabled>
+                    <option value="">加载中...</option>
+                </select>
             </div>
         </div>
         
@@ -2427,6 +2702,102 @@ async function generateHomePage(scuValue, env) {
         
         // 每30秒自动刷新统计
         setInterval(loadStats, 30000);
+        
+        // 加载访问者IP列表和KV使用量
+        async function loadVisitorIPs() {
+            try {
+                const response = await fetch('/api/visitors');
+                if (!response.ok) {
+                    throw new Error('获取访问者IP失败');
+                }
+                const data = await response.json();
+                
+                // 更新KV使用量
+                const kvUsageValue = document.getElementById('kvUsageValue');
+                const kvUsageBar = document.getElementById('kvUsageBar');
+                if (kvUsageValue && kvUsageBar) {
+                    const usageMB = data.kvUsageMB || 0;
+                    const usagePercent = Math.min((usageMB / 5) * 100, 100); // 最多显示100%
+                    kvUsageValue.textContent = usageMB.toFixed(2);
+                    kvUsageBar.style.width = usagePercent + '%';
+                    
+                    // 根据使用量改变颜色
+                    if (usagePercent >= 90) {
+                        kvUsageBar.style.background = '#ff3b30'; // 红色
+                    } else if (usagePercent >= 70) {
+                        kvUsageBar.style.background = '#ff9500'; // 橙色
+                    } else {
+                        kvUsageBar.style.background = '#007aff'; // 蓝色
+                    }
+                    
+                    document.getElementById('kvUsageLoading').style.display = 'none';
+                    document.getElementById('kvUsageContent').style.display = 'block';
+                }
+                
+                // 更新访问者IP列表
+                const visitorIPListElement = document.getElementById('visitorIPList');
+                const visitorIPCountElement = document.getElementById('visitorIPCount');
+                if (visitorIPListElement && data.visitorIPs) {
+                    visitorIPCountElement.textContent = data.totalVisitorIPs || 0;
+                    
+                    if (data.visitorIPs && data.visitorIPs.length > 0) {
+                        visitorIPListElement.innerHTML = '<option value="">请选择IP地址</option>';
+                        data.visitorIPs.forEach(ipItem => {
+                            const option = document.createElement('option');
+                            const ip = ipItem.ip;
+                            const lastSeen = ipItem.lastSeen || ipItem.timestamp;
+                            const loginFailed = ipItem.loginFailed || false;
+                            const accessCount = ipItem.accessCount || 1;
+                            
+                            // 格式化时间为世界时间（UTC）
+                            const date = new Date(lastSeen);
+                            const year = date.getUTCFullYear();
+                            const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+                            const day = String(date.getUTCDate()).padStart(2, '0');
+                            const hours = String(date.getUTCHours()).padStart(2, '0');
+                            const minutes = String(date.getUTCMinutes()).padStart(2, '0');
+                            const seconds = String(date.getUTCSeconds()).padStart(2, '0');
+                            const dateStr = \`\${year}-\${month}-\${day} \${hours}:\${minutes}:\${seconds} UTC\`;
+                            
+                            // 状态标识
+                            const statusIcon = loginFailed ? '🔴 登录失败' : '🟢 正常';
+                            
+                            option.value = ip;
+                            option.textContent = \`\${ip} | \${statusIcon} | 访问 \${accessCount} 次 | \${dateStr}\`;
+                            option.setAttribute('data-ip', ip);
+                            option.setAttribute('data-time', lastSeen);
+                            option.setAttribute('data-failed', loginFailed ? 'true' : 'false');
+                            visitorIPListElement.appendChild(option);
+                        });
+                        visitorIPListElement.disabled = false;
+                    } else {
+                        visitorIPListElement.innerHTML = '<option value="">暂无访问者IP记录</option>';
+                        visitorIPListElement.disabled = true;
+                    }
+                    
+                    document.getElementById('visitorLoading').style.display = 'none';
+                    document.getElementById('visitorContent').style.display = 'block';
+                }
+            } catch (e) {
+                console.error('加载访问者IP失败:', e);
+                if (document.getElementById('visitorLoading')) {
+                    document.getElementById('visitorLoading').textContent = '加载失败';
+                }
+                if (document.getElementById('kvUsageLoading')) {
+                    document.getElementById('kvUsageLoading').textContent = '加载失败';
+                }
+            }
+        }
+        
+        // 页面加载时获取访问者IP和KV使用量
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', loadVisitorIPs);
+        } else {
+            loadVisitorIPs();
+        }
+        
+        // 每30秒自动刷新访问者IP和KV使用量
+        setInterval(loadVisitorIPs, 30000);
     </script>
 </body>
 </html>`;
@@ -2501,6 +2872,8 @@ async function checkPassword(request, env) {
                 // 密码错误，记录失败尝试
                 try {
                     await recordFailedAttempt(clientIP, env);
+                    // 同时记录到访问者IP（标记为登录失败）
+                    await recordVisitorIP(request, env, true);
                 } catch (e) {
                     // 忽略记录失败的错误
                     console.error('记录失败尝试错误:', e);
@@ -2598,6 +2971,14 @@ export default {
             const url = new URL(request.url);
             const path = url.pathname;
             
+            // 记录所有访问者IP（异步，不阻塞请求）
+            // 排除API端点和订阅端点，避免过多记录
+            if (path !== '/api/stats' && !path.match(/^\/[^\/]+\/sub$/)) {
+                recordVisitorIP(request, env, false).catch(e => {
+                    console.error('记录访问者IP失败:', e);
+                });
+            }
+            
             // 退出登录路由（不需要密码验证）
             if (path === '/logout' && request.method === 'GET') {
                 // 清除会话cookie并重定向到登录页面
@@ -2667,9 +3048,33 @@ export default {
                 }), {
                     status: 500,
                     headers: { 'Content-Type': 'application/json; charset=utf-8' }
-                    });
-                }
+                });
             }
+        }
+        
+        // 访问者IP和KV使用量API端点
+        if (path === '/api/visitors' && request.method === 'GET') {
+            try {
+                const visitorData = await getVisitorIPsAndKVUsage(env);
+                return new Response(JSON.stringify(visitorData), {
+                    headers: { 
+                        'Content-Type': 'application/json; charset=utf-8',
+                        'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0'
+                    }
+                });
+            } catch (e) {
+                console.error('获取访问者IP信息错误:', e);
+                return new Response(JSON.stringify({
+                    visitorIPs: [],
+                    totalVisitorIPs: 0,
+                    kvUsageMB: 0,
+                    kvUsageBytes: 0
+                }), {
+                    status: 500,
+                    headers: { 'Content-Type': 'application/json; charset=utf-8' }
+                });
+            }
+        }
         
         // 主页
         if (path === '/' || path === '') {
