@@ -237,6 +237,85 @@ async function clearFailedAttempts(ip, env) {
 // - sub_ip:{IP} - IP访问标记（24小时内防重复记录）
 // - sub_unique:{UUID} - 唯一订阅链接标记
 // - sub_active:{UUID} - 活跃订阅标记（24小时内）
+
+// 自动清理KV存储：当超过5MB时，按时间戳从旧到新清理IP记录
+// 估算：每个IP记录（索引+详细记录+标记）约500-800字节，5MB约等于6000-10000条记录
+// 设置保守的阈值以确保不超过5MB限制
+const MAX_IP_RECORDS = 8000; // 最大IP记录数（约4-5MB，留有余量）
+const MIN_KEEP_RECORDS = 1000; // 最少保留的记录数（保留最新的）
+const CLEANUP_BATCH_SIZE = 500; // 每次清理的批次大小
+const CLEANUP_TARGET_RECORDS = 5000; // 清理后的目标记录数
+
+async function cleanupOldIPRecords(kv) {
+    try {
+        const ipIndexKey = 'sub_stats:ip_index';
+        const ipIndexData = await kv.get(ipIndexKey);
+        
+        if (!ipIndexData) {
+            return; // 没有IP记录，无需清理
+        }
+        
+        let ipIndex = JSON.parse(ipIndexData);
+        
+        // 如果记录数未超过最大限制，无需清理
+        if (ipIndex.length <= MAX_IP_RECORDS) {
+            return;
+        }
+        
+        // 按时间戳从旧到新排序（确保从最旧的开始删除）
+        ipIndex.sort((a, b) => a.timestamp - b.timestamp);
+        
+        // 计算需要删除的记录数（清理到目标数量）
+        const recordsToDelete = ipIndex.length - CLEANUP_TARGET_RECORDS;
+        
+        if (recordsToDelete <= 0) {
+            return; // 不需要删除
+        }
+        
+        console.log(`开始清理KV存储：当前IP记录数 ${ipIndex.length}，将删除 ${recordsToDelete} 条最旧记录，保留 ${CLEANUP_TARGET_RECORDS} 条最新记录`);
+        
+        // 批量删除最旧的IP记录
+        const toDelete = ipIndex.slice(0, recordsToDelete);
+        const toKeep = ipIndex.slice(recordsToDelete);
+        
+        // 删除旧的IP详细记录和访问标记（从旧到新）
+        let deletedCount = 0;
+        let failedCount = 0;
+        
+        for (const ipItem of toDelete) {
+            try {
+                const ipRecordKey = `sub_ip_record:${ipItem.ip}`;
+                const ipKey = `sub_ip:${ipItem.ip}`;
+                
+                // 并行删除IP详细记录和访问标记
+                await Promise.all([
+                    kv.delete(ipRecordKey).catch(() => {}),
+                    kv.delete(ipKey).catch(() => {})
+                ]);
+                
+                deletedCount++;
+                
+                // 批量处理，避免一次性删除太多导致超时
+                if (deletedCount % CLEANUP_BATCH_SIZE === 0) {
+                    console.log(`清理进度：已删除 ${deletedCount}/${recordsToDelete} 条旧IP记录...`);
+                }
+            } catch (e) {
+                // 忽略单个删除失败的错误，继续清理其他记录
+                failedCount++;
+                console.error(`删除IP记录失败 ${ipItem.ip}:`, e);
+            }
+        }
+        
+        // 更新索引列表，只保留未删除的记录
+        await kv.put(ipIndexKey, JSON.stringify(toKeep), { expirationTtl: 604800 });
+        
+        console.log(`KV存储清理完成：成功删除 ${deletedCount} 条旧IP记录，失败 ${failedCount} 条，保留了 ${toKeep.length} 条最新记录`);
+    } catch (e) {
+        console.error('清理KV存储错误:', e);
+        // 清理失败不影响正常功能
+    }
+}
+
 async function recordSubscriptionAccess(request, uuid, env) {
     const clientIP = getClientIP(request);
     const timestamp = Date.now();
@@ -309,6 +388,14 @@ async function recordSubscriptionAccess(request, uuid, env) {
                 
                 // 标记该IP在24小时内已记录（防止重复记录）
                 await kv.put(ipKey, timestamp.toString(), { expirationTtl: 86400 });
+                
+                // 检查并自动清理旧IP记录（如果超过5MB限制）
+                if (ipIndex.length > MAX_IP_RECORDS) {
+                    // 异步清理，不阻塞当前请求
+                    cleanupOldIPRecords(kv).catch(e => {
+                        console.error('自动清理失败:', e);
+                    });
+                }
             } else {
                 // IP在24小时内已访问过，更新最后访问时间（但不在统计中重复计数）
                 const ipRecordKey = `sub_ip_record:${clientIP}`;
@@ -347,6 +434,7 @@ async function recordSubscriptionAccess(request, uuid, env) {
 // 获取订阅统计
 // 从KV存储中读取所有统计数据，包括IP列表
 // 每个IP记录单独存储在KV中，通过索引列表快速查询
+// 会自动检查并清理超过5MB的旧IP记录
 async function getSubscriptionStats(env) {
     try {
         if (env && env.AUTH_KV) {
@@ -399,6 +487,14 @@ async function getSubscriptionStats(env) {
             
             // 所有唯一IP（7天内）
             const allUniqueIPs = [...new Set(ipIndex.map(item => item.ip))];
+            
+            // 检查是否需要清理（如果IP记录超过5MB限制）
+            if (ipIndex.length > MAX_IP_RECORDS) {
+                // 异步清理，不阻塞统计查询
+                cleanupOldIPRecords(kv).catch(e => {
+                    console.error('统计查询时的自动清理失败:', e);
+                });
+            }
             
             return {
                 totalAccess: totalCount,
@@ -2402,9 +2498,9 @@ export default {
                 }), {
                     status: 500,
                     headers: { 'Content-Type': 'application/json; charset=utf-8' }
-                });
+                    });
+                }
             }
-        }
         
         // 主页
         if (path === '/' || path === '') {
