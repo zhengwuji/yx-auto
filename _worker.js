@@ -1858,7 +1858,7 @@ async function generateHomePage(scuValue, env) {
             position: relative;
             width: 51px;
             height: 31px;
-            background: rgba(142, 142, 147, 0.3);
+            background: rgba(255, 255, 255, 0.15);
             border-radius: 16px;
             transition: background 0.3s ease;
             cursor: pointer;
@@ -1878,7 +1878,7 @@ async function generateHomePage(scuValue, env) {
             background: #ffffff;
             border-radius: 50%;
             transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
         }
         
         .switch.active::after {
