@@ -343,12 +343,14 @@ async function recordSubscriptionAccess(request, uuid, env) {
                 await kv.put(uniqueKey, '1', { expirationTtl: 2592000 }); // 标记已生成
             }
             
-            // 记录IP访问（24小时内只记录一次）
-            const ipKey = `sub_ip:${clientIP}`;
-            const ipData = await kv.get(ipKey);
-            if (!ipData) {
-                // 将每个IP记录单独存储在KV中
-                const ipRecordKey = `sub_ip_record:${clientIP}`;
+            // 记录IP访问（每次访问都记录，同IP不重复添加到列表但更新访问时间）
+            const ipRecordKey = `sub_ip_record:${clientIP}`;
+            const existingRecordData = await kv.get(ipRecordKey);
+            
+            let isNewIP = false;
+            if (!existingRecordData) {
+                // 新IP，创建记录
+                isNewIP = true;
                 const ipRecord = {
                     ip: clientIP,
                     timestamp: timestamp,
@@ -356,69 +358,51 @@ async function recordSubscriptionAccess(request, uuid, env) {
                     firstSeen: timestamp,
                     lastSeen: timestamp
                 };
-                // 单个IP记录存储7天
                 await kv.put(ipRecordKey, JSON.stringify(ipRecord), { expirationTtl: 604800 });
-                
-                // 更新IP索引列表（用于快速查询所有IP）
-                const ipIndexKey = 'sub_stats:ip_index';
-                const ipIndexData = await kv.get(ipIndexKey);
-                let ipIndex = ipIndexData ? JSON.parse(ipIndexData) : [];
-                
-                // 移除超过7天的IP索引
-                const sevenDaysAgo = timestamp - 7 * 24 * 60 * 60 * 1000;
-                ipIndex = ipIndex.filter(item => item.timestamp > sevenDaysAgo);
-                
-                // 检查IP是否已在索引中
-                const existingIndex = ipIndex.findIndex(item => item.ip === clientIP);
-                if (existingIndex >= 0) {
-                    // 更新现有IP的时间戳
-                    ipIndex[existingIndex].timestamp = timestamp;
-                    ipIndex[existingIndex].uuid = uuid;
-                } else {
-                    // 添加新IP到索引
-                    ipIndex.push({
-                        ip: clientIP,
-                        timestamp: timestamp,
-                        uuid: uuid
-                    });
-                }
-                
-                // 保存索引列表（7天过期）
-                await kv.put(ipIndexKey, JSON.stringify(ipIndex), { expirationTtl: 604800 });
-                
-                // 标记该IP在24小时内已记录（防止重复记录）
-                await kv.put(ipKey, timestamp.toString(), { expirationTtl: 86400 });
-                
-                // 检查并自动清理旧IP记录（如果超过5MB限制）
-                if (ipIndex.length > MAX_IP_RECORDS) {
-                    // 异步清理，不阻塞当前请求
-                    cleanupOldIPRecords(kv).catch(e => {
-                        console.error('自动清理失败:', e);
-                    });
-                }
             } else {
-                // IP在24小时内已访问过，更新最后访问时间（但不在统计中重复计数）
-                const ipRecordKey = `sub_ip_record:${clientIP}`;
-                const existingRecordData = await kv.get(ipRecordKey);
-                if (existingRecordData) {
-                    const existingRecord = JSON.parse(existingRecordData);
-                    existingRecord.lastSeen = timestamp;
-                    existingRecord.uuid = uuid;
-                    await kv.put(ipRecordKey, JSON.stringify(existingRecord), { expirationTtl: 604800 });
-                    
-                    // 同时更新索引中的时间戳，以便准确统计活跃IP
-                    const ipIndexKey = 'sub_stats:ip_index';
-                    const ipIndexData = await kv.get(ipIndexKey);
-                    if (ipIndexData) {
-                        let ipIndex = JSON.parse(ipIndexData);
-                        const existingIndex = ipIndex.findIndex(item => item.ip === clientIP);
-                        if (existingIndex >= 0) {
-                            ipIndex[existingIndex].timestamp = timestamp;
-                            ipIndex[existingIndex].uuid = uuid;
-                            await kv.put(ipIndexKey, JSON.stringify(ipIndex), { expirationTtl: 604800 });
-                        }
-                    }
-                }
+                // 已存在的IP，更新最后访问时间
+                const existingRecord = JSON.parse(existingRecordData);
+                existingRecord.lastSeen = timestamp;
+                existingRecord.uuid = uuid;
+                await kv.put(ipRecordKey, JSON.stringify(existingRecord), { expirationTtl: 604800 });
+            }
+            
+            // 更新IP索引列表（用于快速查询所有IP）
+            const ipIndexKey = 'sub_stats:ip_index';
+            const ipIndexData = await kv.get(ipIndexKey);
+            let ipIndex = ipIndexData ? JSON.parse(ipIndexData) : [];
+            
+            // 移除超过7天的IP索引
+            const sevenDaysAgo = timestamp - 7 * 24 * 60 * 60 * 1000;
+            ipIndex = ipIndex.filter(item => item.timestamp > sevenDaysAgo);
+            
+            // 检查IP是否已在索引中
+            const existingIndex = ipIndex.findIndex(item => item.ip === clientIP);
+            if (existingIndex >= 0) {
+                // 更新现有IP的时间戳（每次访问都更新）
+                ipIndex[existingIndex].timestamp = timestamp;
+                ipIndex[existingIndex].lastSeen = timestamp;
+                ipIndex[existingIndex].uuid = uuid;
+            } else {
+                // 添加新IP到索引（同IP不重复添加）
+                ipIndex.push({
+                    ip: clientIP,
+                    timestamp: timestamp,
+                    lastSeen: timestamp,
+                    firstSeen: timestamp,
+                    uuid: uuid
+                });
+            }
+            
+            // 保存索引列表（7天过期）
+            await kv.put(ipIndexKey, JSON.stringify(ipIndex), { expirationTtl: 604800 });
+            
+            // 检查并自动清理旧IP记录（如果超过5MB限制）
+            if (ipIndex.length > MAX_IP_RECORDS) {
+                // 异步清理，不阻塞当前请求
+                cleanupOldIPRecords(kv).catch(e => {
+                    console.error('自动清理失败:', e);
+                });
             }
             
             // 记录当前活跃订阅（24小时内的访问）
@@ -461,14 +445,28 @@ async function getSubscriptionStats(env) {
             const originalLength = ipIndex.length;
             
             // 验证每个IP记录是否仍然存在于KV中（可能已过期被自动删除）
+            // 同时从详细记录中获取完整的IP信息（包括firstSeen和lastSeen）
             const validIPs = [];
             for (const ipItem of ipIndex) {
                 if (ipItem.timestamp > sevenDaysAgo) {
-                    // 验证IP记录是否仍在KV中
+                    // 验证IP记录是否仍在KV中，并从详细记录中获取最新信息
                     const ipRecordKey = `sub_ip_record:${ipItem.ip}`;
                     const ipRecordData = await kv.get(ipRecordKey);
                     if (ipRecordData) {
-                        validIPs.push(ipItem);
+                        try {
+                            // 从详细记录中获取完整信息
+                            const ipRecord = JSON.parse(ipRecordData);
+                            validIPs.push({
+                                ip: ipItem.ip,
+                                timestamp: ipItem.timestamp,
+                                lastSeen: ipRecord.lastSeen || ipItem.lastSeen || ipItem.timestamp,
+                                firstSeen: ipRecord.firstSeen || ipItem.firstSeen || ipItem.timestamp,
+                                uuid: ipRecord.uuid || ipItem.uuid
+                            });
+                        } catch (e) {
+                            // 解析失败，使用索引中的基本信息
+                            validIPs.push(ipItem);
+                        }
                     }
                 }
             }
@@ -485,8 +483,34 @@ async function getSubscriptionStats(env) {
             const recentIPs = ipIndex.filter(item => item.timestamp > oneDayAgo);
             const uniqueIPs = [...new Set(recentIPs.map(item => item.ip))];
             
-            // 所有唯一IP（7天内）
-            const allUniqueIPs = [...new Set(ipIndex.map(item => item.ip))];
+            // 准备IP详细信息列表（包含时间戳和在线状态）
+            // 按最后访问时间从新到旧排序
+            const ipDetails = [];
+            const seenIPs = new Set();
+            
+            // 按最后访问时间排序
+            const sortedIPs = [...ipIndex].sort((a, b) => {
+                const lastSeenA = a.lastSeen || a.timestamp;
+                const lastSeenB = b.lastSeen || b.timestamp;
+                return lastSeenB - lastSeenA;
+            });
+            
+            for (const ipItem of sortedIPs) {
+                if (!seenIPs.has(ipItem.ip)) {
+                    seenIPs.add(ipItem.ip);
+                    const lastSeen = ipItem.lastSeen || ipItem.timestamp;
+                    const isOnline = (now - lastSeen) <= (24 * 60 * 60 * 1000); // 24小时内为在线
+                    
+                    ipDetails.push({
+                        ip: ipItem.ip,
+                        timestamp: ipItem.timestamp,
+                        lastSeen: lastSeen,
+                        firstSeen: ipItem.firstSeen || ipItem.timestamp,
+                        isOnline: isOnline,
+                        uuid: ipItem.uuid
+                    });
+                }
+            }
             
             // 检查是否需要清理（如果IP记录超过5MB限制）
             if (ipIndex.length > MAX_IP_RECORDS) {
@@ -500,8 +524,8 @@ async function getSubscriptionStats(env) {
                 totalAccess: totalCount,
                 generatedCount: generatedCount,
                 activeCount: uniqueIPs.length, // 24小时内的活跃订阅者数
-                ipList: allUniqueIPs.slice(0, 50), // 最多返回50个IP（7天内所有）
-                allIPs: allUniqueIPs.length // 7天内所有唯一IP数
+                ipList: ipDetails.slice(0, 50), // 最多返回50个IP（包含详细信息）
+                allIPs: ipDetails.length // 所有唯一IP数
             };
         }
         
@@ -2235,16 +2259,38 @@ async function generateHomePage(scuValue, env) {
                 document.getElementById('statTotal').textContent = stats.totalAccess || 0;
                 document.getElementById('ipCount').textContent = stats.allIPs || 0;
                 
-                // 更新IP列表下拉框
+                // 更新IP列表下拉框（显示访问时间和在线状态）
                 const ipListElement = document.getElementById('ipList');
                 if (stats.ipList && stats.ipList.length > 0) {
                     // 清空现有选项
                     ipListElement.innerHTML = '<option value="">请选择IP地址</option>';
-                    // 添加所有IP选项
-                    stats.ipList.forEach(ip => {
+                    // 添加所有IP选项（包含时间和状态）
+                    stats.ipList.forEach(ipItem => {
                         const option = document.createElement('option');
+                        const ip = typeof ipItem === 'string' ? ipItem : ipItem.ip;
+                        const lastSeen = typeof ipItem === 'object' ? (ipItem.lastSeen || ipItem.timestamp) : Date.now();
+                        const isOnline = typeof ipItem === 'object' ? (ipItem.isOnline !== undefined ? ipItem.isOnline : (Date.now() - lastSeen) <= 24 * 60 * 60 * 1000) : true;
+                        
+                        // 格式化时间为世界时间（UTC）
+                        const date = new Date(lastSeen);
+                        // 手动格式化为 UTC 时间（世界时间）
+                        const year = date.getUTCFullYear();
+                        const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+                        const day = String(date.getUTCDate()).padStart(2, '0');
+                        const hours = String(date.getUTCHours()).padStart(2, '0');
+                        const minutes = String(date.getUTCMinutes()).padStart(2, '0');
+                        const seconds = String(date.getUTCSeconds()).padStart(2, '0');
+                        const dateStr = \`\${year}-\${month}-\${day} \${hours}:\${minutes}:\${seconds} UTC\`;
+                        
+                        // 状态标识
+                        const statusText = isOnline ? '🟢 在线' : '⚪ 离线';
+                        
                         option.value = ip;
-                        option.textContent = ip;
+                        // 显示格式：IP | 状态 | 最后访问时间（世界时间）
+                        option.textContent = \`\${ip} | \${statusText} | \${dateStr}\`;
+                        option.setAttribute('data-ip', ip);
+                        option.setAttribute('data-time', lastSeen);
+                        option.setAttribute('data-status', isOnline ? 'online' : 'offline');
                         ipListElement.appendChild(option);
                     });
                     ipListElement.disabled = false;
