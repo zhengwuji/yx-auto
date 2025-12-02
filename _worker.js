@@ -1792,14 +1792,14 @@ async function generateHomePage(scuValue, env) {
         }
         
         .card {
-            background: rgba(255, 255, 255, 0.8);
+            background: rgba(45, 45, 58, 0.9);
             backdrop-filter: blur(20px) saturate(180%);
             -webkit-backdrop-filter: blur(20px) saturate(180%);
             border-radius: 20px;
             padding: 24px;
             margin-bottom: 16px;
-            box-shadow: 0 2px 16px rgba(0, 0, 0, 0.08);
-            border: 0.5px solid rgba(0, 0, 0, 0.04);
+            box-shadow: 0 2px 16px rgba(0, 0, 0, 0.3);
+            border: 0.5px solid rgba(255, 255, 255, 0.1);
         }
         
         .form-group {
