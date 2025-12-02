@@ -1441,6 +1441,46 @@ async function generateHomePage(scuValue, env) {
             margin-bottom: 8px;
         }
         
+        .header > div {
+            position: relative;
+            margin-bottom: 8px;
+        }
+        
+        .logout-btn {
+            padding: 8px 16px;
+            font-size: 14px;
+            font-weight: 500;
+            color: #86868b;
+            text-decoration: none;
+            background: rgba(142, 142, 147, 0.12);
+            border: 1px solid rgba(142, 142, 147, 0.3);
+            border-radius: 8px;
+            transition: all 0.2s ease;
+            white-space: nowrap;
+            display: inline-block;
+        }
+        
+        .logout-btn:hover {
+            background: rgba(142, 142, 147, 0.2);
+            color: #1d1d1f;
+        }
+        
+        .logout-btn:active {
+            transform: scale(0.98);
+            opacity: 0.8;
+        }
+        
+        @media (max-width: 480px) {
+            .header h1 {
+                font-size: 28px;
+            }
+            
+            .logout-btn {
+                font-size: 12px;
+                padding: 6px 12px;
+            }
+        }
+        
         .header p {
             font-size: 17px;
             color: #86868b;
@@ -1863,13 +1903,27 @@ async function generateHomePage(scuValue, env) {
             .loading {
                 color: #86868b;
             }
+            
+            .logout-btn {
+                background: rgba(142, 142, 147, 0.2);
+                border-color: rgba(142, 142, 147, 0.4);
+                color: #f5f5f7;
+            }
+            
+            .logout-btn:hover {
+                background: rgba(142, 142, 147, 0.3);
+                color: #ffffff;
+            }
         }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>服务器优选工具</h1>
+            <div style="position: relative; margin-bottom: 8px;">
+                <h1 style="margin: 0;">服务器优选工具</h1>
+                <a href="/logout" class="logout-btn" style="position: absolute; top: 0; right: 0; margin: 0;">退出登录</a>
+            </div>
             <p>智能优选 • 一键生成</p>
         </div>
         
@@ -2488,8 +2542,21 @@ export default {
             const url = new URL(request.url);
             const path = url.pathname;
             
-            // 检查密码验证（登录页面除外）
-            if (path !== '/login') {
+            // 退出登录路由（不需要密码验证）
+            if (path === '/logout' && request.method === 'GET') {
+                // 清除会话cookie并重定向到登录页面
+                const logoutCookie = 'cf_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax';
+                return new Response(null, {
+                    status: 302,
+                    headers: {
+                        'Location': '/login',
+                        'Set-Cookie': logoutCookie
+                    }
+                });
+            }
+            
+            // 检查密码验证（登录页面和退出登录页面除外）
+            if (path !== '/login' && path !== '/logout') {
                 try {
                     const passwordCheck = await checkPassword(request, env);
                     if (!passwordCheck.valid) {
