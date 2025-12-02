@@ -812,8 +812,8 @@ function generateLoginPage(error = '') {
         
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif;
-            background: linear-gradient(180deg, #f5f5f7 0%, #ffffff 100%);
-            color: #1d1d1f;
+            background: #2d2d3a;
+            color: #f5f5f7;
             min-height: 100vh;
             display: flex;
             align-items: center;
@@ -824,13 +824,13 @@ function generateLoginPage(error = '') {
         .login-container {
             max-width: 400px;
             width: 100%;
-            background: rgba(255, 255, 255, 0.8);
+            background: rgba(45, 45, 58, 0.9);
             backdrop-filter: blur(20px) saturate(180%);
             -webkit-backdrop-filter: blur(20px) saturate(180%);
             border-radius: 20px;
             padding: 40px 30px;
-            box-shadow: 0 2px 16px rgba(0, 0, 0, 0.08);
-            border: 0.5px solid rgba(0, 0, 0, 0.04);
+            box-shadow: 0 2px 16px rgba(0, 0, 0, 0.3);
+            border: 0.5px solid rgba(255, 255, 255, 0.1);
         }
         
         .login-header {
@@ -842,13 +842,13 @@ function generateLoginPage(error = '') {
             font-size: 28px;
             font-weight: 700;
             letter-spacing: -0.5px;
-            color: #1d1d1f;
+            color: #f5f5f7;
             margin-bottom: 8px;
         }
         
         .login-header p {
             font-size: 15px;
-            color: #86868b;
+            color: #a1a1aa;
         }
         
         .form-group {
@@ -859,7 +859,7 @@ function generateLoginPage(error = '') {
             display: block;
             font-size: 13px;
             font-weight: 600;
-            color: #86868b;
+            color: #a1a1aa;
             margin-bottom: 8px;
             text-transform: uppercase;
             letter-spacing: 0.5px;
@@ -874,8 +874,8 @@ function generateLoginPage(error = '') {
             padding: 14px 50px 14px 16px;
             font-size: 17px;
             font-weight: 400;
-            color: #1d1d1f;
-            background: rgba(142, 142, 147, 0.12);
+            color: #f5f5f7;
+            background: rgba(255, 255, 255, 0.1);
             border: none;
             border-radius: 12px;
             outline: none;
@@ -884,7 +884,11 @@ function generateLoginPage(error = '') {
         }
         
         .form-group input:focus {
-            background: rgba(142, 142, 147, 0.16);
+            background: rgba(255, 255, 255, 0.15);
+        }
+        
+        .form-group input::placeholder {
+            color: #71717a;
         }
         
         .password-toggle {
@@ -894,7 +898,7 @@ function generateLoginPage(error = '') {
             transform: translateY(-50%);
             background: none;
             border: none;
-            color: #86868b;
+            color: #a1a1aa;
             cursor: pointer;
             padding: 8px;
             font-size: 18px;
@@ -907,7 +911,7 @@ function generateLoginPage(error = '') {
         }
         
         .password-toggle:hover {
-            color: #1d1d1f;
+            color: #f5f5f7;
         }
         
         .password-toggle:active {
@@ -958,10 +962,10 @@ function generateLoginPage(error = '') {
         .info-text {
             margin-top: 20px;
             padding: 12px;
-            background: rgba(142, 142, 147, 0.12);
+            background: rgba(255, 255, 255, 0.1);
             border-radius: 8px;
             font-size: 13px;
-            color: #86868b;
+            color: #a1a1aa;
             text-align: center;
         }
         
@@ -1715,8 +1719,8 @@ async function generateHomePage(scuValue, env) {
         
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif;
-            background: linear-gradient(180deg, #f5f5f7 0%, #ffffff 100%);
-            color: #1d1d1f;
+            background: #2d2d3a;
+            color: #f5f5f7;
             min-height: 100vh;
             padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
             overflow-x: hidden;
@@ -1737,7 +1741,7 @@ async function generateHomePage(scuValue, env) {
             font-size: 34px;
             font-weight: 700;
             letter-spacing: -0.5px;
-            color: #1d1d1f;
+            color: #f5f5f7;
             margin-bottom: 8px;
         }
         
@@ -1750,10 +1754,10 @@ async function generateHomePage(scuValue, env) {
             padding: 8px 16px;
             font-size: 14px;
             font-weight: 500;
-            color: #86868b;
+            color: #a1a1aa;
             text-decoration: none;
-            background: rgba(142, 142, 147, 0.12);
-            border: 1px solid rgba(142, 142, 147, 0.3);
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
             border-radius: 8px;
             transition: all 0.2s ease;
             white-space: nowrap;
@@ -1761,8 +1765,8 @@ async function generateHomePage(scuValue, env) {
         }
         
         .logout-btn:hover {
-            background: rgba(142, 142, 147, 0.2);
-            color: #1d1d1f;
+            background: rgba(255, 255, 255, 0.15);
+            color: #f5f5f7;
         }
         
         .logout-btn:active {
@@ -1783,7 +1787,7 @@ async function generateHomePage(scuValue, env) {
         
         .header p {
             font-size: 17px;
-            color: #86868b;
+            color: #a1a1aa;
             font-weight: 400;
         }
         
@@ -1806,7 +1810,7 @@ async function generateHomePage(scuValue, env) {
             display: block;
             font-size: 13px;
             font-weight: 600;
-            color: #86868b;
+            color: #a1a1aa;
             margin-bottom: 8px;
             text-transform: uppercase;
             letter-spacing: 0.5px;
@@ -1817,8 +1821,8 @@ async function generateHomePage(scuValue, env) {
             padding: 14px 16px;
             font-size: 17px;
             font-weight: 400;
-            color: #1d1d1f;
-            background: rgba(142, 142, 147, 0.12);
+            color: #f5f5f7;
+            background: rgba(255, 255, 255, 0.1);
             border: none;
             border-radius: 12px;
             outline: none;
@@ -1827,12 +1831,12 @@ async function generateHomePage(scuValue, env) {
         }
         
         .form-group input:focus {
-            background: rgba(142, 142, 147, 0.16);
+            background: rgba(255, 255, 255, 0.15);
             transform: scale(1.01);
         }
         
         .form-group input::placeholder {
-            color: #86868b;
+            color: #71717a;
         }
         
         .switch-group {
@@ -1845,7 +1849,7 @@ async function generateHomePage(scuValue, env) {
         .switch-group label {
             font-size: 17px;
             font-weight: 400;
-            color: #1d1d1f;
+            color: #f5f5f7;
             text-transform: none;
             letter-spacing: 0;
         }
@@ -1903,13 +1907,13 @@ async function generateHomePage(scuValue, env) {
         }
         
         .btn-secondary {
-            background: rgba(142, 142, 147, 0.12);
-            color: #007aff;
+            background: rgba(255, 255, 255, 0.1);
+            color: #5ac8fa;
             box-shadow: none;
         }
         
         .btn-secondary:active {
-            background: rgba(142, 142, 147, 0.2);
+            background: rgba(255, 255, 255, 0.15);
         }
         
         .result {
@@ -1930,10 +1934,10 @@ async function generateHomePage(scuValue, env) {
         .result-url {
             margin-top: 12px;
             padding: 12px;
-            background: rgba(0, 122, 255, 0.1);
+            background: rgba(90, 200, 250, 0.15);
             border-radius: 8px;
             font-size: 13px;
-            color: #007aff;
+            color: #5ac8fa;
             word-break: break-all;
         }
         
@@ -1941,8 +1945,8 @@ async function generateHomePage(scuValue, env) {
             margin-top: 8px;
             padding: 10px 16px;
             font-size: 15px;
-            background: rgba(0, 122, 255, 0.1);
-            color: #007aff;
+            background: rgba(90, 200, 250, 0.15);
+            color: #5ac8fa;
             border: none;
             border-radius: 8px;
             cursor: pointer;
@@ -1952,9 +1956,9 @@ async function generateHomePage(scuValue, env) {
             padding: 12px 10px;
             font-size: 14px;
             font-weight: 500;
-            color: #007aff;
-            background: rgba(0, 122, 255, 0.1);
-            border: 1px solid rgba(0, 122, 255, 0.2);
+            color: #5ac8fa;
+            background: rgba(90, 200, 250, 0.15);
+            border: 1px solid rgba(90, 200, 250, 0.3);
             border-radius: 10px;
             cursor: pointer;
             transition: all 0.2s ease;
@@ -1967,7 +1971,7 @@ async function generateHomePage(scuValue, env) {
         
         .client-btn:active {
             transform: scale(0.98);
-            background: rgba(0, 122, 255, 0.2);
+            background: rgba(90, 200, 250, 0.25);
         }
         
         .checkbox-label {
@@ -2010,7 +2014,7 @@ async function generateHomePage(scuValue, env) {
         .footer {
             text-align: center;
             padding: 30px 20px;
-            color: #86868b;
+            color: #a1a1aa;
             font-size: 13px;
         }
         
@@ -2023,20 +2027,20 @@ async function generateHomePage(scuValue, env) {
         }
         
         .stats-card {
-            background: rgba(255, 255, 255, 0.8);
+            background: rgba(45, 45, 58, 0.9);
             backdrop-filter: blur(20px) saturate(180%);
             -webkit-backdrop-filter: blur(20px) saturate(180%);
             border-radius: 20px;
             padding: 20px;
             margin-bottom: 16px;
-            box-shadow: 0 2px 16px rgba(0, 0, 0, 0.08);
-            border: 0.5px solid rgba(0, 0, 0, 0.04);
+            box-shadow: 0 2px 16px rgba(0, 0, 0, 0.3);
+            border: 0.5px solid rgba(255, 255, 255, 0.1);
         }
         
         .stats-title {
             font-size: 17px;
             font-weight: 600;
-            color: #1d1d1f;
+            color: #f5f5f7;
             margin-bottom: 16px;
         }
         
@@ -2050,21 +2054,21 @@ async function generateHomePage(scuValue, env) {
         .stat-item {
             text-align: center;
             padding: 12px 8px;
-            background: rgba(142, 142, 147, 0.12);
+            background: rgba(255, 255, 255, 0.1);
             border-radius: 12px;
         }
         
         .stat-value {
             font-size: 24px;
             font-weight: 700;
-            color: #007aff;
+            color: #5ac8fa;
             display: block;
             margin-bottom: 4px;
         }
         
         .stat-label {
             font-size: 12px;
-            color: #86868b;
+            color: #a1a1aa;
         }
         
         .ip-select {
@@ -2072,8 +2076,8 @@ async function generateHomePage(scuValue, env) {
             padding: 14px 16px;
             font-size: 17px;
             font-weight: 400;
-            color: #1d1d1f;
-            background: rgba(142, 142, 147, 0.12);
+            color: #f5f5f7;
+            background: rgba(255, 255, 255, 0.1);
             border: none;
             border-radius: 12px;
             outline: none;
@@ -2081,7 +2085,7 @@ async function generateHomePage(scuValue, env) {
             -webkit-appearance: none;
             appearance: none;
             cursor: pointer;
-            background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%231d1d1f' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
+            background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23f5f5f7' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
             background-repeat: no-repeat;
             background-position: right 12px center;
             background-size: 20px;
@@ -2089,19 +2093,19 @@ async function generateHomePage(scuValue, env) {
         }
         
         .ip-select:focus {
-            background: rgba(142, 142, 147, 0.16);
+            background: rgba(255, 255, 255, 0.15);
             transform: scale(1.01);
         }
         
         .ip-select option {
             padding: 10px;
-            background: #ffffff;
-            color: #1d1d1f;
+            background: #2d2d3a;
+            color: #f5f5f7;
         }
         
         .loading {
             text-align: center;
-            color: #86868b;
+            color: #a1a1aa;
             padding: 20px;
         }
         
@@ -2266,8 +2270,8 @@ async function generateHomePage(scuValue, env) {
                     <span class="stat-value" id="kvUsageValue">0</span>
                     <span class="stat-label">MB / 5MB</span>
                 </div>
-                <div style="margin-top: 12px; width: 100%; height: 8px; background: rgba(142, 142, 147, 0.12); border-radius: 4px; overflow: hidden;">
-                    <div id="kvUsageBar" style="height: 100%; background: #007aff; border-radius: 4px; transition: width 0.3s ease; width: 0%;"></div>
+                <div style="margin-top: 12px; width: 100%; height: 8px; background: rgba(255, 255, 255, 0.1); border-radius: 4px; overflow: hidden;">
+                    <div id="kvUsageBar" style="height: 100%; background: #5ac8fa; border-radius: 4px; transition: width 0.3s ease; width: 0%;"></div>
                 </div>
             </div>
         </div>
@@ -2276,8 +2280,8 @@ async function generateHomePage(scuValue, env) {
             <div class="stats-title">🌐 访问者IP列表</div>
             <div class="loading" id="visitorLoading">加载中...</div>
             <div id="visitorContent" style="display: none;">
-                <div style="margin-bottom: 12px; font-size: 13px; color: #86868b; text-align: center;">
-                    共 <span id="visitorIPCount" style="font-weight: 600; color: #007aff;">0</span> 个访问者IP（保存3天）
+                <div style="margin-bottom: 12px; font-size: 13px; color: #a1a1aa; text-align: center;">
+                    共 <span id="visitorIPCount" style="font-weight: 600; color: #5ac8fa;">0</span> 个访问者IP（保存3天）
                 </div>
                 <select class="ip-select" id="visitorIPList" disabled>
                     <option value="">加载中...</option>
@@ -2299,7 +2303,7 @@ async function generateHomePage(scuValue, env) {
             <div class="form-group">
                 <label>WebSocket路径（可选）</label>
                 <input type="text" id="customPath" placeholder="留空则使用默认路径 /" value="/">
-                <small style="display: block; margin-top: 6px; color: #86868b; font-size: 13px;">自定义WebSocket路径，例如：/v2ray 或 /</small>
+                <small style="display: block; margin-top: 6px; color: #a1a1aa; font-size: 13px;">自定义WebSocket路径，例如：/v2ray 或 /</small>
             </div>
             
             <div class="switch-group">
@@ -2320,13 +2324,13 @@ async function generateHomePage(scuValue, env) {
             <div class="form-group" id="githubUrlGroup" style="margin-top: 12px;">
                 <label>GitHub优选URL（可选）</label>
                 <input type="text" id="githubUrl" placeholder="留空则使用默认地址" style="font-size: 15px;">
-                <small style="display: block; margin-top: 6px; color: #86868b; font-size: 13px;">自定义GitHub优选IP列表来源URL，留空则使用默认地址</small>
+                <small style="display: block; margin-top: 6px; color: #a1a1aa; font-size: 13px;">自定义GitHub优选IP列表来源URL，留空则使用默认地址</small>
             </div>
             
             <div class="form-group" id="preferredIPsUrlGroup" style="margin-top: 12px;">
                 <label>优选IP来源URL (yxURL)（可选）</label>
                 <input type="text" id="preferredIPsUrl" placeholder="留空则使用默认wetest地址" style="font-size: 15px;">
-                <small style="display: block; margin-top: 6px; color: #86868b; font-size: 13px;">自定义优选IP来源URL，支持HTML页面或文本格式，留空则使用默认wetest地址</small>
+                <small style="display: block; margin-top: 6px; color: #a1a1aa; font-size: 13px;">自定义优选IP来源URL，支持HTML页面或文本格式，留空则使用默认wetest地址</small>
             </div>
             
             <div class="form-group" style="margin-top: 24px;">
@@ -2400,14 +2404,14 @@ async function generateHomePage(scuValue, env) {
                 <label>仅TLS节点</label>
                 <div class="switch" id="switchTLS" onclick="toggleSwitch('switchTLS')"></div>
             </div>
-            <small style="display: block; margin-top: -12px; margin-bottom: 12px; color: #86868b; font-size: 13px; padding-left: 0;">启用后只生成带TLS的节点，不生成非TLS节点（如80端口）</small>
+            <small style="display: block; margin-top: -12px; margin-bottom: 12px; color: #a1a1aa; font-size: 13px; padding-left: 0;">启用后只生成带TLS的节点，不生成非TLS节点（如80端口）</small>
         </div>
         
         <div class="footer">
             <p>简化版优选工具 • 仅用于节点生成</p>
             <div style="margin-top: 20px; display: flex; justify-content: center; gap: 24px; flex-wrap: wrap;">
-                <a href="https://github.com/byJoey/cfnew" target="_blank" style="color: #007aff; text-decoration: none; font-size: 15px; font-weight: 500;">GitHub 项目</a>
-                <a href="https://www.youtube.com/@joeyblog" target="_blank" style="color: #007aff; text-decoration: none; font-size: 15px; font-weight: 500;">YouTube @joeyblog</a>
+                <a href="https://github.com/byJoey/cfnew" target="_blank" style="color: #5ac8fa; text-decoration: none; font-size: 15px; font-weight: 500;">GitHub 项目</a>
+                <a href="https://www.youtube.com/@joeyblog" target="_blank" style="color: #5ac8fa; text-decoration: none; font-size: 15px; font-weight: 500;">YouTube @joeyblog</a>
             </div>
         </div>
     </div>
@@ -2727,7 +2731,7 @@ async function generateHomePage(scuValue, env) {
                     } else if (usagePercent >= 70) {
                         kvUsageBar.style.background = '#ff9500'; // 橙色
                     } else {
-                        kvUsageBar.style.background = '#007aff'; // 蓝色
+                        kvUsageBar.style.background = '#5ac8fa'; // 蓝色
                     }
                     
                     document.getElementById('kvUsageLoading').style.display = 'none';
