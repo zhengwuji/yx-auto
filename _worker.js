@@ -229,6 +229,14 @@ async function clearFailedAttempts(ip, env) {
 
 // 订阅统计相关函数
 // 记录订阅访问
+// KV存储结构：
+// - sub_stats:total - 总访问次数（数字字符串）
+// - sub_stats:generated - 已生成的订阅数（数字字符串）
+// - sub_stats:ip_index - IP索引列表（JSON数组，包含所有IP的基本信息）
+// - sub_ip_record:{IP} - 单个IP详细记录（JSON对象，包含ip, timestamp, uuid, firstSeen, lastSeen）
+// - sub_ip:{IP} - IP访问标记（24小时内防重复记录）
+// - sub_unique:{UUID} - 唯一订阅链接标记
+// - sub_active:{UUID} - 活跃订阅标记（24小时内）
 async function recordSubscriptionAccess(request, uuid, env) {
     const clientIP = getClientIP(request);
     const timestamp = Date.now();
@@ -260,24 +268,70 @@ async function recordSubscriptionAccess(request, uuid, env) {
             const ipKey = `sub_ip:${clientIP}`;
             const ipData = await kv.get(ipKey);
             if (!ipData) {
-                // 记录新的IP访问
-                const ipListKey = 'sub_stats:ip_list';
-                const ipListData = await kv.get(ipListKey);
-                let ipList = ipListData ? JSON.parse(ipListData) : [];
-                
-                // 移除超过7天的记录
-                const sevenDaysAgo = timestamp - 7 * 24 * 60 * 60 * 1000;
-                ipList = ipList.filter(item => item.timestamp > sevenDaysAgo);
-                
-                // 添加新IP
-                ipList.push({
+                // 将每个IP记录单独存储在KV中
+                const ipRecordKey = `sub_ip_record:${clientIP}`;
+                const ipRecord = {
                     ip: clientIP,
                     timestamp: timestamp,
-                    uuid: uuid
-                });
+                    uuid: uuid,
+                    firstSeen: timestamp,
+                    lastSeen: timestamp
+                };
+                // 单个IP记录存储7天
+                await kv.put(ipRecordKey, JSON.stringify(ipRecord), { expirationTtl: 604800 });
                 
-                await kv.put(ipListKey, JSON.stringify(ipList), { expirationTtl: 604800 }); // 7天过期
-                await kv.put(ipKey, timestamp.toString(), { expirationTtl: 86400 }); // 24小时内不重复记录
+                // 更新IP索引列表（用于快速查询所有IP）
+                const ipIndexKey = 'sub_stats:ip_index';
+                const ipIndexData = await kv.get(ipIndexKey);
+                let ipIndex = ipIndexData ? JSON.parse(ipIndexData) : [];
+                
+                // 移除超过7天的IP索引
+                const sevenDaysAgo = timestamp - 7 * 24 * 60 * 60 * 1000;
+                ipIndex = ipIndex.filter(item => item.timestamp > sevenDaysAgo);
+                
+                // 检查IP是否已在索引中
+                const existingIndex = ipIndex.findIndex(item => item.ip === clientIP);
+                if (existingIndex >= 0) {
+                    // 更新现有IP的时间戳
+                    ipIndex[existingIndex].timestamp = timestamp;
+                    ipIndex[existingIndex].uuid = uuid;
+                } else {
+                    // 添加新IP到索引
+                    ipIndex.push({
+                        ip: clientIP,
+                        timestamp: timestamp,
+                        uuid: uuid
+                    });
+                }
+                
+                // 保存索引列表（7天过期）
+                await kv.put(ipIndexKey, JSON.stringify(ipIndex), { expirationTtl: 604800 });
+                
+                // 标记该IP在24小时内已记录（防止重复记录）
+                await kv.put(ipKey, timestamp.toString(), { expirationTtl: 86400 });
+            } else {
+                // IP在24小时内已访问过，更新最后访问时间（但不在统计中重复计数）
+                const ipRecordKey = `sub_ip_record:${clientIP}`;
+                const existingRecordData = await kv.get(ipRecordKey);
+                if (existingRecordData) {
+                    const existingRecord = JSON.parse(existingRecordData);
+                    existingRecord.lastSeen = timestamp;
+                    existingRecord.uuid = uuid;
+                    await kv.put(ipRecordKey, JSON.stringify(existingRecord), { expirationTtl: 604800 });
+                    
+                    // 同时更新索引中的时间戳，以便准确统计活跃IP
+                    const ipIndexKey = 'sub_stats:ip_index';
+                    const ipIndexData = await kv.get(ipIndexKey);
+                    if (ipIndexData) {
+                        let ipIndex = JSON.parse(ipIndexData);
+                        const existingIndex = ipIndex.findIndex(item => item.ip === clientIP);
+                        if (existingIndex >= 0) {
+                            ipIndex[existingIndex].timestamp = timestamp;
+                            ipIndex[existingIndex].uuid = uuid;
+                            await kv.put(ipIndexKey, JSON.stringify(ipIndex), { expirationTtl: 604800 });
+                        }
+                    }
+                }
             }
             
             // 记录当前活跃订阅（24小时内的访问）
@@ -291,6 +345,8 @@ async function recordSubscriptionAccess(request, uuid, env) {
 }
 
 // 获取订阅统计
+// 从KV存储中读取所有统计数据，包括IP列表
+// 每个IP记录单独存储在KV中，通过索引列表快速查询
 async function getSubscriptionStats(env) {
     try {
         if (env && env.AUTH_KV) {
@@ -306,29 +362,43 @@ async function getSubscriptionStats(env) {
             const generatedData = await kv.get(generatedKey);
             const generatedCount = generatedData ? parseInt(generatedData) : 0;
             
-            // 获取IP列表
-            const ipListKey = 'sub_stats:ip_list';
-            const ipListData = await kv.get(ipListKey);
-            let ipList = ipListData ? JSON.parse(ipListData) : [];
+            // 从KV索引获取IP列表
+            const ipIndexKey = 'sub_stats:ip_index';
+            const ipIndexData = await kv.get(ipIndexKey);
+            let ipIndex = ipIndexData ? JSON.parse(ipIndexData) : [];
             
             // 清理过期IP（超过7天）
             const now = Date.now();
             const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
-            const originalLength = ipList.length;
-            ipList = ipList.filter(item => item.timestamp > sevenDaysAgo);
+            const originalLength = ipIndex.length;
+            
+            // 验证每个IP记录是否仍然存在于KV中（可能已过期被自动删除）
+            const validIPs = [];
+            for (const ipItem of ipIndex) {
+                if (ipItem.timestamp > sevenDaysAgo) {
+                    // 验证IP记录是否仍在KV中
+                    const ipRecordKey = `sub_ip_record:${ipItem.ip}`;
+                    const ipRecordData = await kv.get(ipRecordKey);
+                    if (ipRecordData) {
+                        validIPs.push(ipItem);
+                    }
+                }
+            }
             
             // 如果有清理，保存回KV（优化存储）
-            if (ipList.length < originalLength) {
-                await kv.put(ipListKey, JSON.stringify(ipList), { expirationTtl: 604800 });
+            if (validIPs.length < originalLength) {
+                await kv.put(ipIndexKey, JSON.stringify(validIPs), { expirationTtl: 604800 });
             }
+            
+            ipIndex = validIPs;
             
             // 获取唯一IP列表（去重，只统计24小时内的活跃IP）
             const oneDayAgo = now - 24 * 60 * 60 * 1000;
-            const recentIPs = ipList.filter(item => item.timestamp > oneDayAgo);
+            const recentIPs = ipIndex.filter(item => item.timestamp > oneDayAgo);
             const uniqueIPs = [...new Set(recentIPs.map(item => item.ip))];
             
             // 所有唯一IP（7天内）
-            const allUniqueIPs = [...new Set(ipList.map(item => item.ip))];
+            const allUniqueIPs = [...new Set(ipIndex.map(item => item.ip))];
             
             return {
                 totalAccess: totalCount,
