@@ -1537,23 +1537,36 @@ async function generateHomePage(scuValue, env) {
             color: #86868b;
         }
         
-        .ip-list {
-            max-height: 200px;
-            overflow-y: auto;
-            padding: 12px;
-            background: rgba(142, 142, 147, 0.08);
-            border-radius: 12px;
-            font-size: 13px;
+        .ip-select {
+            width: 100%;
+            padding: 14px 16px;
+            font-size: 17px;
+            font-weight: 400;
             color: #1d1d1f;
+            background: rgba(142, 142, 147, 0.12);
+            border: none;
+            border-radius: 12px;
+            outline: none;
+            transition: all 0.2s ease;
+            -webkit-appearance: none;
+            appearance: none;
+            cursor: pointer;
+            background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%231d1d1f' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
+            background-repeat: no-repeat;
+            background-position: right 12px center;
+            background-size: 20px;
+            padding-right: 40px;
         }
         
-        .ip-item {
-            padding: 6px 0;
-            border-bottom: 1px solid rgba(142, 142, 147, 0.2);
+        .ip-select:focus {
+            background: rgba(142, 142, 147, 0.16);
+            transform: scale(1.01);
         }
         
-        .ip-item:last-child {
-            border-bottom: none;
+        .ip-select option {
+            padding: 10px;
+            background: #ffffff;
+            color: #1d1d1f;
         }
         
         .loading {
@@ -1642,13 +1655,19 @@ async function generateHomePage(scuValue, env) {
                 color: #5ac8fa;
             }
             
-            .ip-list {
-                background: rgba(142, 142, 147, 0.15);
+            .ip-select {
+                background: rgba(142, 142, 147, 0.2);
                 color: #f5f5f7;
+                background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23f5f5f7' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
             }
             
-            .ip-item {
-                border-bottom-color: rgba(142, 142, 147, 0.3);
+            .ip-select:focus {
+                background: rgba(142, 142, 147, 0.25);
+            }
+            
+            .ip-select option {
+                background: #1c1c1e;
+                color: #f5f5f7;
             }
             
             .loading {
@@ -1684,9 +1703,9 @@ async function generateHomePage(scuValue, env) {
                 </div>
                 <div class="form-group" style="margin-top: 12px; margin-bottom: 0;">
                     <label>订阅者IP列表（共 <span id="ipCount">0</span> 个）</label>
-                    <div class="ip-list" id="ipList">
-                        <div class="loading">暂无数据</div>
-                    </div>
+                    <select class="ip-select" id="ipList" disabled>
+                        <option value="">加载中...</option>
+                    </select>
                 </div>
             </div>
         </div>
@@ -2050,14 +2069,22 @@ async function generateHomePage(scuValue, env) {
                 document.getElementById('statTotal').textContent = stats.totalAccess || 0;
                 document.getElementById('ipCount').textContent = stats.allIPs || 0;
                 
-                // 更新IP列表
+                // 更新IP列表下拉框
                 const ipListElement = document.getElementById('ipList');
                 if (stats.ipList && stats.ipList.length > 0) {
-                    ipListElement.innerHTML = stats.ipList.map(ip => 
-                        \`<div class="ip-item">\${ip}</div>\`
-                    ).join('');
+                    // 清空现有选项
+                    ipListElement.innerHTML = '<option value="">请选择IP地址</option>';
+                    // 添加所有IP选项
+                    stats.ipList.forEach(ip => {
+                        const option = document.createElement('option');
+                        option.value = ip;
+                        option.textContent = ip;
+                        ipListElement.appendChild(option);
+                    });
+                    ipListElement.disabled = false;
                 } else {
-                    ipListElement.innerHTML = '<div class="loading">暂无IP记录</div>';
+                    ipListElement.innerHTML = '<option value="">暂无IP记录</option>';
+                    ipListElement.disabled = true;
                 }
                 
                 // 显示内容，隐藏加载
