@@ -227,6 +227,138 @@ async function clearFailedAttempts(ip, env) {
     // 如果没有 KV 存储，无需清除
 }
 
+// 订阅统计相关函数
+// 记录订阅访问
+async function recordSubscriptionAccess(request, uuid, env) {
+    const clientIP = getClientIP(request);
+    const timestamp = Date.now();
+    
+    try {
+        // 使用 KV 存储（如果可用）
+        if (env && env.AUTH_KV) {
+            const kv = env.AUTH_KV;
+            
+            // 记录总访问次数
+            const totalKey = 'sub_stats:total';
+            const totalData = await kv.get(totalKey);
+            const totalCount = totalData ? parseInt(totalData) : 0;
+            await kv.put(totalKey, (totalCount + 1).toString(), { expirationTtl: 2592000 }); // 30天过期
+            
+            // 记录唯一订阅链接（通过UUID识别）
+            const uniqueKey = `sub_unique:${uuid}`;
+            const uniqueExists = await kv.get(uniqueKey);
+            if (!uniqueExists) {
+                // 这是一个新的订阅链接
+                const generatedKey = 'sub_stats:generated';
+                const generatedData = await kv.get(generatedKey);
+                const generatedCount = generatedData ? parseInt(generatedData) : 0;
+                await kv.put(generatedKey, (generatedCount + 1).toString(), { expirationTtl: 2592000 });
+                await kv.put(uniqueKey, '1', { expirationTtl: 2592000 }); // 标记已生成
+            }
+            
+            // 记录IP访问（24小时内只记录一次）
+            const ipKey = `sub_ip:${clientIP}`;
+            const ipData = await kv.get(ipKey);
+            if (!ipData) {
+                // 记录新的IP访问
+                const ipListKey = 'sub_stats:ip_list';
+                const ipListData = await kv.get(ipListKey);
+                let ipList = ipListData ? JSON.parse(ipListData) : [];
+                
+                // 移除超过7天的记录
+                const sevenDaysAgo = timestamp - 7 * 24 * 60 * 60 * 1000;
+                ipList = ipList.filter(item => item.timestamp > sevenDaysAgo);
+                
+                // 添加新IP
+                ipList.push({
+                    ip: clientIP,
+                    timestamp: timestamp,
+                    uuid: uuid
+                });
+                
+                await kv.put(ipListKey, JSON.stringify(ipList), { expirationTtl: 604800 }); // 7天过期
+                await kv.put(ipKey, timestamp.toString(), { expirationTtl: 86400 }); // 24小时内不重复记录
+            }
+            
+            // 记录当前活跃订阅（24小时内的访问）
+            const activeKey = `sub_active:${uuid}`;
+            await kv.put(activeKey, timestamp.toString(), { expirationTtl: 86400 });
+        }
+    } catch (e) {
+        // 忽略统计记录错误，不影响订阅功能
+        console.error('记录订阅访问错误:', e);
+    }
+}
+
+// 获取订阅统计
+async function getSubscriptionStats(env) {
+    try {
+        if (env && env.AUTH_KV) {
+            const kv = env.AUTH_KV;
+            
+            // 获取总访问次数
+            const totalKey = 'sub_stats:total';
+            const totalData = await kv.get(totalKey);
+            const totalCount = totalData ? parseInt(totalData) : 0;
+            
+            // 获取生成的订阅数
+            const generatedKey = 'sub_stats:generated';
+            const generatedData = await kv.get(generatedKey);
+            const generatedCount = generatedData ? parseInt(generatedData) : 0;
+            
+            // 获取IP列表
+            const ipListKey = 'sub_stats:ip_list';
+            const ipListData = await kv.get(ipListKey);
+            let ipList = ipListData ? JSON.parse(ipListData) : [];
+            
+            // 清理过期IP（超过7天）
+            const now = Date.now();
+            const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
+            const originalLength = ipList.length;
+            ipList = ipList.filter(item => item.timestamp > sevenDaysAgo);
+            
+            // 如果有清理，保存回KV（优化存储）
+            if (ipList.length < originalLength) {
+                await kv.put(ipListKey, JSON.stringify(ipList), { expirationTtl: 604800 });
+            }
+            
+            // 获取唯一IP列表（去重，只统计24小时内的活跃IP）
+            const oneDayAgo = now - 24 * 60 * 60 * 1000;
+            const recentIPs = ipList.filter(item => item.timestamp > oneDayAgo);
+            const uniqueIPs = [...new Set(recentIPs.map(item => item.ip))];
+            
+            // 所有唯一IP（7天内）
+            const allUniqueIPs = [...new Set(ipList.map(item => item.ip))];
+            
+            return {
+                totalAccess: totalCount,
+                generatedCount: generatedCount,
+                activeCount: uniqueIPs.length, // 24小时内的活跃订阅者数
+                ipList: allUniqueIPs.slice(0, 50), // 最多返回50个IP（7天内所有）
+                allIPs: allUniqueIPs.length // 7天内所有唯一IP数
+            };
+        }
+        
+        // 如果没有 KV 存储，返回默认值
+        return {
+            totalAccess: 0,
+            generatedCount: 0,
+            activeCount: 0,
+            ipList: [],
+            allIPs: 0
+        };
+    } catch (e) {
+        console.error('获取订阅统计错误:', e);
+        return {
+            totalAccess: 0,
+            generatedCount: 0,
+            activeCount: 0,
+            ipList: [],
+            allIPs: 0
+        };
+    }
+}
+
 function generateLoginPage(error = '') {
     return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -688,6 +820,7 @@ function generateLinksFromSource(list, user, workerDomain, disableNonTLS = false
                     security: 'tls', 
                     sni: workerDomain, 
                     fp: 'chrome', 
+                    alpn: 'h2,http/1.1',
                     type: 'ws', 
                     host: workerDomain, 
                     path: wsPath
@@ -755,6 +888,7 @@ async function generateTrojanLinksFromSource(list, user, workerDomain, disableNo
                     security: 'tls', 
                     sni: workerDomain, 
                     fp: 'chrome', 
+                    alpn: 'h2,http/1.1',
                     type: 'ws', 
                     host: workerDomain, 
                     path: wsPath
@@ -831,6 +965,7 @@ function generateVMessLinksFromSource(list, user, workerDomain, disableNonTLS = 
             if (tls) {
                 vmessConfig.sni = workerDomain;
                 vmessConfig.fp = "chrome";
+                vmessConfig.alpn = "h2,http/1.1";
             }
             const vmessBase64 = btoa(JSON.stringify(vmessConfig));
             links.push(`vmess://${vmessBase64}`);
@@ -853,7 +988,7 @@ function generateLinksFromNewIPs(list, user, workerDomain, customPath = '/') {
         
         if (CF_HTTPS_PORTS.includes(port)) {
             const wsNodeName = `${nodeName}-${port}-WS-TLS`;
-            const link = `${proto}://${user}@${item.ip}:${port}?encryption=none&security=tls&sni=${workerDomain}&fp=chrome&type=ws&host=${workerDomain}&path=${wsPath}#${encodeURIComponent(wsNodeName)}`;
+            const link = `${proto}://${user}@${item.ip}:${port}?encryption=none&security=tls&sni=${workerDomain}&fp=chrome&alpn=h2,http/1.1&type=ws&host=${workerDomain}&path=${wsPath}#${encodeURIComponent(wsNodeName)}`;
             links.push(link);
         } else if (CF_HTTP_PORTS.includes(port)) {
             const wsNodeName = `${nodeName}-${port}-WS`;
@@ -861,7 +996,7 @@ function generateLinksFromNewIPs(list, user, workerDomain, customPath = '/') {
             links.push(link);
         } else {
             const wsNodeName = `${nodeName}-${port}-WS-TLS`;
-            const link = `${proto}://${user}@${item.ip}:${port}?encryption=none&security=tls&sni=${workerDomain}&fp=chrome&type=ws&host=${workerDomain}&path=${wsPath}#${encodeURIComponent(wsNodeName)}`;
+            const link = `${proto}://${user}@${item.ip}:${port}?encryption=none&security=tls&sni=${workerDomain}&fp=chrome&alpn=h2,http/1.1&type=ws&host=${workerDomain}&path=${wsPath}#${encodeURIComponent(wsNodeName)}`;
             links.push(link);
         }
     });
@@ -869,7 +1004,7 @@ function generateLinksFromNewIPs(list, user, workerDomain, customPath = '/') {
 }
 
 // 生成订阅内容
-async function handleSubscriptionRequest(request, user, customDomain, piu, yxURL, ipv4Enabled, ipv6Enabled, ispMobile, ispUnicom, ispTelecom, evEnabled, etEnabled, vmEnabled, disableNonTLS, customPath) {
+async function handleSubscriptionRequest(request, user, customDomain, piu, yxURL, ipv4Enabled, ipv6Enabled, ispMobile, ispUnicom, ispTelecom, evEnabled, etEnabled, vmEnabled, disableNonTLS, customPath, env) {
     const url = new URL(request.url);
     const finalLinks = [];
     const workerDomain = url.hostname;  // workerDomain始终是请求的hostname
@@ -983,6 +1118,14 @@ async function handleSubscriptionRequest(request, user, customDomain, piu, yxURL
             break;
         default:
             subscriptionContent = btoa(finalLinks.join('\n'));
+    }
+    
+    // 记录订阅访问（异步，不阻塞响应）
+    if (env) {
+        recordSubscriptionAccess(request, user, env).catch(e => {
+            // 忽略记录错误，不影响订阅功能
+            console.error('记录订阅访问失败:', e);
+        });
     }
     
     return new Response(subscriptionContent, {
@@ -1349,6 +1492,91 @@ async function generateHomePage(scuValue, env) {
             opacity: 0.6;
         }
         
+        .stats-card {
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(20px) saturate(180%);
+            -webkit-backdrop-filter: blur(20px) saturate(180%);
+            border-radius: 20px;
+            padding: 20px;
+            margin-bottom: 16px;
+            box-shadow: 0 2px 16px rgba(0, 0, 0, 0.08);
+            border: 0.5px solid rgba(0, 0, 0, 0.04);
+        }
+        
+        .stats-title {
+            font-size: 17px;
+            font-weight: 600;
+            color: #1d1d1f;
+            margin-bottom: 16px;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+        
+        .stat-item {
+            text-align: center;
+            padding: 12px 8px;
+            background: rgba(142, 142, 147, 0.12);
+            border-radius: 12px;
+        }
+        
+        .stat-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: #007aff;
+            display: block;
+            margin-bottom: 4px;
+        }
+        
+        .stat-label {
+            font-size: 12px;
+            color: #86868b;
+        }
+        
+        .ip-list {
+            max-height: 200px;
+            overflow-y: auto;
+            padding: 12px;
+            background: rgba(142, 142, 147, 0.08);
+            border-radius: 12px;
+            font-size: 13px;
+            color: #1d1d1f;
+        }
+        
+        .ip-item {
+            padding: 6px 0;
+            border-bottom: 1px solid rgba(142, 142, 147, 0.2);
+        }
+        
+        .ip-item:last-child {
+            border-bottom: none;
+        }
+        
+        .loading {
+            text-align: center;
+            color: #86868b;
+            padding: 20px;
+        }
+        
+        @media (max-width: 480px) {
+            .stats-grid {
+                grid-template-columns: repeat(3, 1fr);
+                gap: 8px;
+            }
+            
+            .stat-value {
+                font-size: 20px;
+            }
+            
+            .stat-label {
+                font-size: 11px;
+            }
+        }
+        
         @media (prefers-color-scheme: dark) {
             body {
                 background: linear-gradient(180deg, #000000 0%, #1c1c1e 100%);
@@ -1396,6 +1624,36 @@ async function generateHomePage(scuValue, env) {
             .footer a {
                 color: #5ac8fa !important;
             }
+            
+            .stats-card {
+                background: rgba(28, 28, 30, 0.8);
+                border: 0.5px solid rgba(255, 255, 255, 0.1);
+            }
+            
+            .stats-title {
+                color: #f5f5f7;
+            }
+            
+            .stat-item {
+                background: rgba(142, 142, 147, 0.2);
+            }
+            
+            .stat-value {
+                color: #5ac8fa;
+            }
+            
+            .ip-list {
+                background: rgba(142, 142, 147, 0.15);
+                color: #f5f5f7;
+            }
+            
+            .ip-item {
+                border-bottom-color: rgba(142, 142, 147, 0.3);
+            }
+            
+            .loading {
+                color: #86868b;
+            }
         }
     </style>
 </head>
@@ -1404,6 +1662,33 @@ async function generateHomePage(scuValue, env) {
         <div class="header">
             <h1>服务器优选工具</h1>
             <p>智能优选 • 一键生成</p>
+        </div>
+        
+        <div class="stats-card" id="statsCard">
+            <div class="stats-title">📊 订阅统计</div>
+            <div class="loading" id="statsLoading">加载中...</div>
+            <div id="statsContent" style="display: none;">
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <span class="stat-value" id="statActive">0</span>
+                        <span class="stat-label">当前使用</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-value" id="statGenerated">0</span>
+                        <span class="stat-label">已生成</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-value" id="statTotal">0</span>
+                        <span class="stat-label">总访问</span>
+                    </div>
+                </div>
+                <div class="form-group" style="margin-top: 12px; margin-bottom: 0;">
+                    <label>订阅者IP列表（共 <span id="ipCount">0</span> 个）</label>
+                    <div class="ip-list" id="ipList">
+                        <div class="loading">暂无数据</div>
+                    </div>
+                </div>
+            </div>
         </div>
         
         <div class="card">
@@ -1749,6 +2034,50 @@ async function generateHomePage(scuValue, env) {
                 }
             }
         }
+        
+        // 加载订阅统计
+        async function loadStats() {
+            try {
+                const response = await fetch('/api/stats');
+                if (!response.ok) {
+                    throw new Error('获取统计失败');
+                }
+                const stats = await response.json();
+                
+                // 更新统计数据
+                document.getElementById('statActive').textContent = stats.activeCount || 0;
+                document.getElementById('statGenerated').textContent = stats.generatedCount || 0;
+                document.getElementById('statTotal').textContent = stats.totalAccess || 0;
+                document.getElementById('ipCount').textContent = stats.allIPs || 0;
+                
+                // 更新IP列表
+                const ipListElement = document.getElementById('ipList');
+                if (stats.ipList && stats.ipList.length > 0) {
+                    ipListElement.innerHTML = stats.ipList.map(ip => 
+                        \`<div class="ip-item">\${ip}</div>\`
+                    ).join('');
+                } else {
+                    ipListElement.innerHTML = '<div class="loading">暂无IP记录</div>';
+                }
+                
+                // 显示内容，隐藏加载
+                document.getElementById('statsLoading').style.display = 'none';
+                document.getElementById('statsContent').style.display = 'block';
+            } catch (e) {
+                console.error('加载统计失败:', e);
+                document.getElementById('statsLoading').textContent = '加载失败';
+            }
+        }
+        
+        // 页面加载时获取统计
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', loadStats);
+        } else {
+            loadStats();
+        }
+        
+        // 每30秒自动刷新统计
+        setInterval(loadStats, 30000);
     </script>
 </body>
 </html>`;
@@ -1955,6 +2284,31 @@ export default {
                 }
             }
         
+        // 统计API端点
+        if (path === '/api/stats' && request.method === 'GET') {
+            try {
+                const stats = await getSubscriptionStats(env);
+                return new Response(JSON.stringify(stats), {
+                    headers: { 
+                        'Content-Type': 'application/json; charset=utf-8',
+                        'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0'
+                    }
+                });
+            } catch (e) {
+                console.error('获取统计信息错误:', e);
+                return new Response(JSON.stringify({
+                    totalAccess: 0,
+                    generatedCount: 0,
+                    activeCount: 0,
+                    ipList: [],
+                    allIPs: 0
+                }), {
+                    status: 500,
+                    headers: { 'Content-Type': 'application/json; charset=utf-8' }
+                });
+            }
+        }
+        
         // 主页
         if (path === '/' || path === '') {
             const scuValue = env?.scu || scu;
@@ -2013,7 +2367,7 @@ export default {
             // 自定义路径
             const customPath = url.searchParams.get('path') || '/';
             
-            return await handleSubscriptionRequest(request, uuid, domain, piu, yxURL, ipv4Enabled, ipv6Enabled, ispMobile, ispUnicom, ispTelecom, evEnabled, etEnabled, vmEnabled, disableNonTLS, customPath);
+            return await handleSubscriptionRequest(request, uuid, domain, piu, yxURL, ipv4Enabled, ipv6Enabled, ispMobile, ispUnicom, ispTelecom, evEnabled, etEnabled, vmEnabled, disableNonTLS, customPath, env);
         }
         
         return new Response('Not Found', { status: 404 });
