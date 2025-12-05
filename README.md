@@ -1,8 +1,9 @@
 设置密码：
 在 Cloudflare Workers 后台，进入你的 Worker
 在 Settings → Variables 中添加环境变量：
-变量名：LOGIN_PASSWORD
-变量值：你的密码（例如：mypassword123）
+- **登录验证**：使用 `ADMIN_PASSWORD` 进行身份验证 登陆密码设置
+- **会话管理**：使用 `SESSION_SECRET` 签名 Cookie
+- **订阅Token**：每次获取订阅链接需要有效 Token
 访问网站：
 首次访问会显示登录页面
 输入正确的密码后即可访问主页和生成订阅
