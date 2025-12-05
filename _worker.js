@@ -176,12 +176,10 @@ async function checkBruteForceProtection(ip, env) {
                             await kv.delete(attemptKey);
                         } catch (e) {
                             // 忽略删除错误
-                            console.error('清除锁定记录错误:', e);
                         }
                     }
                 }
             } catch (e) {
-                console.error('检查锁定状态错误:', e);
             }
             
             // 检查尝试次数
@@ -201,7 +199,6 @@ async function checkBruteForceProtection(ip, env) {
                             await kv.put(lockoutKey, lockoutUntil.toString());
                             await kv.delete(attemptKey);
                         } catch (e) {
-                            console.error('设置锁定错误:', e);
                         }
                         return {
                             blocked: true,
@@ -214,17 +211,14 @@ async function checkBruteForceProtection(ip, env) {
                     try {
                         await kv.put(attemptKey, JSON.stringify(recentAttempts), { expirationTtl: Math.ceil(LOCKOUT_TIME / 1000) });
                     } catch (e) {
-                        console.error('更新尝试记录错误:', e);
                     }
                 }
             } catch (e) {
-                console.error('检查尝试次数错误:', e);
             }
             
             return { blocked: false };
         } catch (e) {
             // KV 操作失败，记录错误但不阻止访问
-            console.error('KV 操作错误:', e);
             return { blocked: false };
         }
     }
@@ -247,7 +241,6 @@ async function recordFailedAttempt(ip, env) {
             await kv.put(attemptKey, JSON.stringify(attempts), { expirationTtl: 900 }); // 15分钟过期
         } catch (e) {
             // 忽略记录失败的错误，不影响登录流程
-            console.error('记录失败尝试错误:', e);
         }
     }
     // 如果没有 KV 存储，无法记录尝试次数
@@ -263,7 +256,6 @@ async function clearFailedAttempts(ip, env) {
             await kv.delete(`auth_lockout:${ip}`);
         } catch (e) {
             // 忽略清除失败的错误
-            console.error('清除失败尝试记录错误:', e);
         }
     }
     // 如果没有 KV 存储，无需清除
@@ -359,13 +351,11 @@ async function recordVisitorIP(request, env, loginFailed = false) {
             if (ipIndex.length > MAX_VISITOR_IP_RECORDS) {
                 // 异步清理，不阻塞当前请求
                 cleanupOldVisitorIPRecords(kv).catch(e => {
-                    console.error('自动清理访问者IP失败:', e);
                 });
             }
         }
     } catch (e) {
         // 忽略记录错误，不影响正常功能
-        console.error('记录访问者IP错误:', e);
     }
 }
 
@@ -395,8 +385,6 @@ async function cleanupOldVisitorIPRecords(kv) {
             return;
         }
         
-        console.log(`开始清理访问者IP记录：当前记录数 ${ipIndex.length}，将删除 ${recordsToDelete} 条最旧记录`);
-        
         const toDelete = ipIndex.slice(0, recordsToDelete);
         const toKeep = ipIndex.slice(recordsToDelete);
         
@@ -409,22 +397,14 @@ async function cleanupOldVisitorIPRecords(kv) {
                 const ipRecordKey = `visitor_ip_record:${ipItem.ip}`;
                 await kv.delete(ipRecordKey);
                 deletedCount++;
-                
-                if (deletedCount % VISITOR_CLEANUP_BATCH_SIZE === 0) {
-                    console.log(`清理进度：已删除 ${deletedCount}/${recordsToDelete} 条旧访问者IP记录...`);
-                }
             } catch (e) {
                 failedCount++;
-                console.error(`删除访问者IP记录失败 ${ipItem.ip}:`, e);
             }
         }
         
         // 更新索引列表
         await kv.put(ipIndexKey, JSON.stringify(toKeep), { expirationTtl: VISITOR_IP_TTL });
-        
-        console.log(`访问者IP记录清理完成：成功删除 ${deletedCount} 条，失败 ${failedCount} 条，保留了 ${toKeep.length} 条最新记录`);
     } catch (e) {
-        console.error('清理访问者IP记录错误:', e);
     }
 }
 
@@ -503,7 +483,6 @@ async function getVisitorIPsAndKVUsage(env) {
             kvUsageBytes: 0
         };
     } catch (e) {
-        console.error('获取访问者IP列表错误:', e);
         return {
             visitorIPs: [],
             totalVisitorIPs: 0,
@@ -558,8 +537,6 @@ async function cleanupOldIPRecords(kv) {
             return; // 不需要删除
         }
         
-        console.log(`开始清理KV存储：当前IP记录数 ${ipIndex.length}，将删除 ${recordsToDelete} 条最旧记录，保留 ${CLEANUP_TARGET_RECORDS} 条最新记录`);
-        
         // 批量删除最旧的IP记录
         const toDelete = ipIndex.slice(0, recordsToDelete);
         const toKeep = ipIndex.slice(recordsToDelete);
@@ -580,24 +557,15 @@ async function cleanupOldIPRecords(kv) {
                 ]);
                 
                 deletedCount++;
-                
-                // 批量处理，避免一次性删除太多导致超时
-                if (deletedCount % CLEANUP_BATCH_SIZE === 0) {
-                    console.log(`清理进度：已删除 ${deletedCount}/${recordsToDelete} 条旧IP记录...`);
-                }
             } catch (e) {
                 // 忽略单个删除失败的错误，继续清理其他记录
                 failedCount++;
-                console.error(`删除IP记录失败 ${ipItem.ip}:`, e);
             }
         }
         
         // 更新索引列表，只保留未删除的记录
         await kv.put(ipIndexKey, JSON.stringify(toKeep), { expirationTtl: 604800 });
-        
-        console.log(`KV存储清理完成：成功删除 ${deletedCount} 条旧IP记录，失败 ${failedCount} 条，保留了 ${toKeep.length} 条最新记录`);
     } catch (e) {
-        console.error('清理KV存储错误:', e);
         // 清理失败不影响正常功能
     }
 }
@@ -687,7 +655,6 @@ async function recordSubscriptionAccess(request, uuid, env) {
             if (ipIndex.length > MAX_IP_RECORDS) {
                 // 异步清理，不阻塞当前请求
                 cleanupOldIPRecords(kv).catch(e => {
-                    console.error('自动清理失败:', e);
                 });
             }
             
@@ -697,7 +664,6 @@ async function recordSubscriptionAccess(request, uuid, env) {
         }
     } catch (e) {
         // 忽略统计记录错误，不影响订阅功能
-        console.error('记录订阅访问错误:', e);
     }
 }
 
@@ -802,7 +768,6 @@ async function getSubscriptionStats(env) {
             if (ipIndex.length > MAX_IP_RECORDS) {
                 // 异步清理，不阻塞统计查询
                 cleanupOldIPRecords(kv).catch(e => {
-                    console.error('统计查询时的自动清理失败:', e);
                 });
             }
             
@@ -824,7 +789,6 @@ async function getSubscriptionStats(env) {
             allIPs: 0
         };
     } catch (e) {
-        console.error('获取订阅统计错误:', e);
         return {
             totalAccess: 0,
             generatedCount: 0,
@@ -1306,7 +1270,6 @@ async function fetchPreferredIPsFromURL(yxURL, ipv4Enabled = true, ipv6Enabled =
         
         return results;
     } catch (error) {
-        console.error('从自定义URL获取优选IP失败:', error);
         return [];
     }
 }
@@ -1584,7 +1547,6 @@ async function handleSubscriptionRequest(request, user, customDomain, piu, yxURL
                     await addNodesFromList(customIPList);
                 }
             } catch (error) {
-                console.error('从自定义URL获取优选IP失败:', error);
                 // 如果自定义URL失败，回退到默认wetest
                 try {
                     const dynamicIPList = await fetchDynamicIPs(ipv4Enabled, ipv6Enabled, ispMobile, ispUnicom, ispTelecom);
@@ -1592,7 +1554,6 @@ async function handleSubscriptionRequest(request, user, customDomain, piu, yxURL
                         await addNodesFromList(dynamicIPList);
                     }
                 } catch (e) {
-                    console.error('获取动态IP失败:', e);
                 }
             }
         } else {
@@ -1600,11 +1561,10 @@ async function handleSubscriptionRequest(request, user, customDomain, piu, yxURL
             try {
                 const dynamicIPList = await fetchDynamicIPs(ipv4Enabled, ipv6Enabled, ispMobile, ispUnicom, ispTelecom);
                 if (dynamicIPList.length > 0) {
-                    await addNodesFromList(dynamicIPList);
+                        await addNodesFromList(dynamicIPList);
+                    }
+                } catch (error) {
                 }
-            } catch (error) {
-                console.error('获取动态IP失败:', error);
-            }
         }
     }
 
@@ -1623,7 +1583,6 @@ async function handleSubscriptionRequest(request, user, customDomain, piu, yxURL
                 // GitHub IP只支持VLESS格式
             }
         } catch (error) {
-            console.error('获取GitHub IP失败:', error);
         }
     }
 
@@ -1660,7 +1619,6 @@ async function handleSubscriptionRequest(request, user, customDomain, piu, yxURL
     if (env) {
         recordSubscriptionAccess(request, user, env).catch(e => {
             // 忽略记录错误，不影响订阅功能
-            console.error('记录订阅访问失败:', e);
         });
     }
     
@@ -2734,7 +2692,6 @@ async function generateHomePage(scuValue, env) {
                 document.getElementById('statsLoading').style.display = 'none';
                 document.getElementById('statsContent').style.display = 'block';
             } catch (e) {
-                console.error('加载统计失败:', e);
                 document.getElementById('statsLoading').textContent = '加载失败';
             }
         }
@@ -2825,7 +2782,6 @@ async function generateHomePage(scuValue, env) {
                     document.getElementById('visitorContent').style.display = 'block';
                 }
             } catch (e) {
-                console.error('加载访问者IP失败:', e);
                 if (document.getElementById('visitorLoading')) {
                     document.getElementById('visitorLoading').textContent = '加载失败';
                 }
@@ -2896,7 +2852,6 @@ async function checkPassword(request, env) {
                     await clearFailedAttempts(clientIP, env);
                 } catch (e) {
                     // 忽略清除失败的错误
-                    console.error('清除失败尝试记录错误:', e);
                 }
                 
                 // 创建会话
@@ -2924,7 +2879,6 @@ async function checkPassword(request, env) {
                     await recordVisitorIP(request, env, true);
                 } catch (e) {
                     // 忽略记录失败的错误
-                    console.error('记录失败尝试错误:', e);
                 }
                 
                 // 再次检查是否达到限制
@@ -2944,7 +2898,6 @@ async function checkPassword(request, env) {
                     }
                 } catch (e) {
                     // 忽略检查错误，继续返回密码错误
-                    console.error('检查防暴力破解错误:', e);
                 }
                 
                 return {
@@ -2957,7 +2910,6 @@ async function checkPassword(request, env) {
             }
         } catch (e) {
             // 处理登录过程中的任何错误
-            console.error('登录处理错误:', e);
             return {
                 valid: false,
                 response: new Response(generateLoginPage('登录处理出错，请重试'), {
@@ -2990,7 +2942,6 @@ async function checkPassword(request, env) {
                 };
             }
         } catch (e) {
-            console.error('验证订阅token错误:', e);
             return {
                 valid: false,
                 response: new Response('访问被拒绝：订阅链接验证失败。请先登录并生成新的订阅链接。', {
@@ -3023,7 +2974,6 @@ export default {
             // 排除API端点和订阅端点，避免过多记录
             if (path !== '/api/stats' && !path.match(/^\/[^\/]+\/sub$/)) {
                 recordVisitorIP(request, env, false).catch(e => {
-                    console.error('记录访问者IP失败:', e);
                 });
             }
             
@@ -3052,7 +3002,6 @@ export default {
                         return passwordCheck.response;
                     }
                 } catch (e) {
-                    console.error('密码验证错误:', e);
                     // 如果验证出错，返回错误页面
                     return new Response('服务器错误，请稍后重试', {
                         status: 500,
@@ -3067,7 +3016,6 @@ export default {
                         return passwordCheck.response;
                     }
                 } catch (e) {
-                    console.error('登录处理错误:', e);
                     return new Response(generateLoginPage('登录处理出错，请重试'), {
                         status: 500,
                         headers: { 'Content-Type': 'text/html; charset=utf-8' }
@@ -3086,7 +3034,6 @@ export default {
                     }
                 });
             } catch (e) {
-                console.error('获取统计信息错误:', e);
                 return new Response(JSON.stringify({
                     totalAccess: 0,
                     generatedCount: 0,
@@ -3111,7 +3058,6 @@ export default {
                     }
                 });
             } catch (e) {
-                console.error('获取访问者IP信息错误:', e);
                 return new Response(JSON.stringify({
                     visitorIPs: [],
                     totalVisitorIPs: 0,
@@ -3188,7 +3134,6 @@ export default {
         return new Response('Not Found', { status: 404 });
         } catch (e) {
             // 捕获所有未处理的错误
-            console.error('Worker 错误:', e);
             return new Response('服务器内部错误，请稍后重试', {
                 status: 500,
                 headers: { 'Content-Type': 'text/plain; charset=utf-8' }
