@@ -14,27 +14,49 @@ let scu = 'https://url.v1.mk/sub';  // 订阅转换地址
 
 // 密码验证相关函数
 function getPassword(env) {
-    // 从环境变量获取密码，如果未设置则返回空（表示不需要密码）
-    return env?.LOGIN_PASSWORD || '';
+    // 从环境变量获取管理员密码，如果未设置则返回空（表示不需要密码）
+    return env?.ADMIN_PASSWORD || '';
+}
+
+// 获取会话密钥
+function getSessionSecret(env) {
+    // 从环境变量获取会话密钥，用于签名 Cookie 和订阅 token
+    return env?.SESSION_SECRET || '';
+}
+
+// 生成会话签名
+async function generateSessionSignature(sessionData, env) {
+    const secret = getSessionSecret(env);
+    if (!secret) {
+        // 如果没有设置 SESSION_SECRET，使用简单编码
+        return btoa(sessionData).substring(0, 32);
+    }
+    // 使用 SESSION_SECRET 签名会话数据
+    const dataToSign = sessionData + secret;
+    const encoder = new TextEncoder();
+    const data = encoder.encode(dataToSign);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    return btoa(hashHex).substring(0, 32).replace(/[+/=]/g, '');
 }
 
 function generateSessionToken() {
-    // 生成简单的会话令牌（实际应用中应使用更安全的方法）
+    // 生成简单的会话令牌
     return btoa(Date.now().toString() + Math.random().toString()).substring(0, 32);
 }
 
 // 生成订阅token（永久有效）
-// 使用密码的哈希值作为token的基础，确保只有登录用户才能生成有效token
+// 使用 SESSION_SECRET 的哈希值作为token的基础，确保只有知道密钥的人才能生成有效token
 async function generateSubscriptionToken(env) {
-    const password = getPassword(env);
-    if (!password) {
-        // 如果没有设置密码，返回空token（表示不需要验证）
+    const secret = getSessionSecret(env);
+    if (!secret) {
+        // 如果没有设置 SESSION_SECRET，返回空token（表示不需要验证）
         return '';
     }
-    // 使用密码生成一个稳定的token
-    // 使用简单的哈希方法（实际应用中可以使用更安全的方法）
-    const tokenData = password + 'subscription_token_salt';
-    // 生成token（基于密码，确保只有知道密码的人才能生成）
+    // 使用 SESSION_SECRET 生成一个稳定的token
+    const tokenData = secret + 'subscription_token_salt';
+    // 生成token（基于 SESSION_SECRET，确保只有知道密钥的人才能生成）
     const hash = await simpleHash(tokenData);
     return hash.substring(0, 48).replace(/[+/=]/g, '');
 }
@@ -52,9 +74,9 @@ async function simpleHash(str) {
 
 // 验证订阅token
 async function isValidSubscriptionToken(token, env) {
-    const password = getPassword(env);
-    if (!password) {
-        // 如果没有设置密码，任何token都有效（或不需要token）
+    const secret = getSessionSecret(env);
+    if (!secret) {
+        // 如果没有设置 SESSION_SECRET，任何token都有效（或不需要token）
         return true;
     }
     if (!token) {
@@ -65,8 +87,8 @@ async function isValidSubscriptionToken(token, env) {
     return token === expectedToken;
 }
 
-function isValidSession(cookieHeader, env) {
-    // 检查会话是否有效（简单实现，实际应用中应使用更安全的方法）
+async function isValidSession(cookieHeader, env) {
+    // 检查会话是否有效
     if (!cookieHeader) return false;
     const cookies = Object.fromEntries(
         cookieHeader.split(';').map(c => c.trim().split('='))
@@ -74,18 +96,38 @@ function isValidSession(cookieHeader, env) {
     const sessionToken = cookies['cf_session'];
     if (!sessionToken) return false;
     
-    // 简单的会话验证（实际应用中应使用 KV 存储或更安全的方法）
-    // 这里使用环境变量中的密码作为会话密钥的一部分
-    const password = getPassword(env);
-    if (!password) return true; // 如果没有设置密码，则允许访问
+    const secret = getSessionSecret(env);
+    if (!secret) {
+        // 如果没有设置 SESSION_SECRET，使用简单的时间戳验证
+        try {
+            const decoded = atob(sessionToken);
+            const timestamp = parseInt(decoded.substring(0, 13));
+            const now = Date.now();
+            // 会话有效期24小时
+            return (now - timestamp) < 24 * 60 * 60 * 1000;
+        } catch (e) {
+            return false;
+        }
+    }
     
-    // 验证会话（简化版，实际应用中应使用更安全的方法）
+    // 使用 SESSION_SECRET 验证会话签名
     try {
         const decoded = atob(sessionToken);
-        const timestamp = parseInt(decoded.substring(0, 13));
+        const parts = decoded.split('|');
+        if (parts.length !== 2) return false;
+        
+        const timestamp = parseInt(parts[0]);
+        const signature = parts[1];
         const now = Date.now();
-        // 会话有效期24小时
-        return (now - timestamp) < 24 * 60 * 60 * 1000;
+        
+        // 检查会话是否过期（24小时）
+        if ((now - timestamp) >= 24 * 60 * 60 * 1000) {
+            return false;
+        }
+        
+        // 验证签名
+        const expectedSignature = await generateSessionSignature(parts[0], env);
+        return signature === expectedSignature;
     } catch (e) {
         return false;
     }
@@ -2823,7 +2865,7 @@ async function checkPassword(request, env) {
     
     // 检查会话
     const cookieHeader = request.headers.get('Cookie');
-    if (isValidSession(cookieHeader, env)) {
+    if (await isValidSession(cookieHeader, env)) {
         return { valid: true };
     }
     
@@ -2858,8 +2900,10 @@ async function checkPassword(request, env) {
                 }
                 
                 // 创建会话
-                const sessionToken = generateSessionToken();
-                const sessionCookie = `cf_session=${btoa(Date.now().toString() + sessionToken)}; Path=/; Max-Age=86400; HttpOnly; SameSite=Lax`;
+                const timestamp = Date.now().toString();
+                const signature = await generateSessionSignature(timestamp, env);
+                const sessionValue = btoa(timestamp + '|' + signature);
+                const sessionCookie = `cf_session=${sessionValue}; Path=/; Max-Age=86400; HttpOnly; SameSite=Lax`;
                 
                 // 重定向到主页
                 return {
